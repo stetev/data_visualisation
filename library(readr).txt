@@ -1,0 +1,14 @@
+library(readr)
+library(readr)
+> plot(video$grade)
+> plot(as.factor(video$grade))
+plot(video$age,type="p")
+
+datasets fof biology
+chest x ray images¨normal x pneumonia
+
+
+find what is the phenomenal that the data are describing
+descriptive statistics: mean, median, mode, vovarience, variance, standart deviation, zvalue, percentiles, pobability distribution
+
+dis

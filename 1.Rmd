@@ -1,0 +1,34 @@
+---
+title: "prikazy"
+output: html_document
+date: "2026-04-15"
+---
+
+```{r parkins}
+old_parkins <- parkins
+```
+
+```{r parkins}
+names(parkins) <- make.names(names(parkins))
+
+```
+
+```{r parkins}
+str(parkins)
+```
+
+```{r parkins}
+summary(parkins)
+```
+
+```{r parkins}
+numeric_cols <- setdiff(names(parkins), "name")
+parkins[numeric_cols] <- lapply(parkins[numeric_cols], function(x) {
+  as.numeric(gsub(",", ".", x))
+})
+
+```
+
+```{r parkins}
+colSums(is.na(parkins))
+```
