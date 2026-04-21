@@ -1,0 +1,340 @@
+
+```{r}
+library(dplyr)
+library(stringr)
+library(lubridate)
+
+clean_percent_column <- function(x) {
+  x %>%
+    str_trim() %>%
+    
+    # fix OCR-like patterns
+    str_replace_all("^IV\\.", "14.") %>%
+    str_replace_all("^III\\.", "111.") %>%
+    str_replace_all("^II\\.", "11.") %>%
+    str_replace_all("^I\\.", "1.") %>%
+    
+    # fix suffix cases
+    str_replace_all("\\.VII$", ".7") %>%
+    str_replace_all("\\.VI$", ".6") %>%
+    str_replace_all("\\.V$", ".5") %>%
+    str_replace_all("\\.IV$", ".4") %>%
+    str_replace_all("\\.III$", ".3") %>%
+    str_replace_all("\\.II$", ".2") %>%
+    str_replace_all("\\.I$", ".1") %>%
+    
+    # remove leading zeros like 04.7 → 4.7
+    str_replace("^0+", "") %>%
+    
+    na_if("") %>%
+    as.numeric()
+}
+```
+
+```{r}
+vaccinations_clean <- vaccinations %>%
+  mutate(
+    date = dmy(date),
+    total_vaccinations_per_hundred = clean_percent_column(total_vaccinations_per_hundred),
+    people_vaccinated_per_hundred = clean_percent_column(people_vaccinated_per_hundred),
+    people_fully_vaccinated_per_hundred = clean_percent_column(people_fully_vaccinated_per_hundred),
+    total_boosters_per_hundred = clean_percent_column(total_boosters_per_hundred)
+  )
+```
+
+
+```{r}
+summary(vaccinations_clean$total_vaccinations_per_hundred)
+```
+
+
+```{r}
+vaccinations %>%
+  mutate(cleaned = clean_percent_column(total_vaccinations_per_hundred)) %>%
+  filter(
+    !is.na(total_vaccinations_per_hundred) &
+    is.na(cleaned)
+  ) %>%
+  distinct(total_vaccinations_per_hundred)
+```
+
+
+```{r}
+library(dplyr)
+library(stringr)
+library(lubridate)
+
+roman_to_number <- function(x) {
+  case_when(
+    x == "I" ~ 1,
+    x == "II" ~ 2,
+    x == "III" ~ 3,
+    x == "IV" ~ 4,
+    x == "V" ~ 5,
+    x == "VI" ~ 6,
+    x == "VII" ~ 7,
+    x == "VIII" ~ 8,
+    x == "IX" ~ 9,
+    x == "X" ~ 10,
+    x == "XI" ~ 11,
+    x == "XII" ~ 12,
+    TRUE ~ NA_real_
+  )
+}
+
+parse_mixed_number <- function(x) {
+  if (is.na(x) || x == "") return(NA_real_)
+  
+  x <- str_trim(x)
+  
+  # normal numeric value
+  if (str_detect(x, "^[0-9]+(\\.[0-9]+)?$")) {
+    return(as.numeric(x))
+  }
+  
+  # values like I.51, II.55, IV.22, V.14, 01.VIII, 03.XI
+  if (str_detect(x, "^[A-Z0-9]+\\.[A-Z0-9]+$")) {
+    parts <- str_split(x, "\\.", simplify = TRUE)
+    left <- parts[1]
+    right <- parts[2]
+    
+    left_num <- if (str_detect(left, "^[0-9]+$")) {
+      as.numeric(left)
+    } else {
+      roman_to_number(left)
+    }
+    
+    right_num <- if (str_detect(right, "^[0-9]+$")) {
+      as.numeric(right)
+    } else {
+      roman_to_number(right)
+    }
+    
+    if (is.na(left_num) || is.na(right_num)) {
+      return(NA_real_)
+    }
+    
+    # decimal reconstruction: V.14 -> 5.14, 01.VIII -> 1.08
+    return(left_num + right_num / 100)
+  }
+  
+  NA_real_
+}
+
+clean_percent_column <- function(x) {
+  sapply(x, parse_mixed_number)
+}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+vaccinations_clean <- vaccinations %>%
+  mutate(
+    date = dmy(date),
+    total_vaccinations_per_hundred = clean_percent_column(total_vaccinations_per_hundred),
+    people_vaccinated_per_hundred = clean_percent_column(people_vaccinated_per_hundred),
+    people_fully_vaccinated_per_hundred = clean_percent_column(people_fully_vaccinated_per_hundred),
+    total_boosters_per_hundred = clean_percent_column(total_boosters_per_hundred)
+  )
+```
+
+
+```{r}
+problem_values <- vaccinations %>%
+  mutate(cleaned = clean_percent_column(total_vaccinations_per_hundred)) %>%
+  filter(!is.na(total_vaccinations_per_hundred) & is.na(cleaned)) %>%
+  distinct(total_vaccinations_per_hundred)
+
+problem_values
+```
+
+
+```{r}
+summary(vaccinations_clean$total_vaccinations_per_hundred)
+```
+
+```{r}
+library(ggplot2)
+
+vaccinations_clean %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  ggplot(aes(x = date, y = people_fully_vaccinated_per_hundred, color = location)) +
+  geom_line() +
+  labs(
+    title = "Vaccination Progress Over Time",
+    x = "Date",
+    y = "Fully Vaccinated per 100"
+  ) +
+  theme_minimal()
+```
+```{r}
+countries <- c("Germany", "France", "United States", "India")
+
+vaccinations_clean %>%
+  filter(location %in% countries,
+         !is.na(total_vaccinations_per_hundred)) %>%
+  ggplot(aes(x = date, y = total_vaccinations_per_hundred, color = location)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Vaccination Progress Comparison",
+    x = "Date",
+    y = "Total vaccinations per 100 people"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+top_countries <- vaccinations_clean %>%
+  group_by(location) %>%
+  summarise(max_vac = max(total_vaccinations_per_hundred, na.rm = TRUE)) %>%
+  arrange(desc(max_vac)) %>%
+  slice(1:5) %>%
+  pull(location)
+```
+
+```{r}
+vaccinations_clean %>%
+  filter(location %in% top_countries,
+         !is.na(total_vaccinations_per_hundred)) %>%
+  ggplot(aes(x = date, y = total_vaccinations_per_hundred, color = location)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Top performers",
+    x = "Date",
+    y = "Total vaccinations per 100 people"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+theme_minimal() +
+theme(
+  plot.title = element_text(size = 14, face = "bold"),
+  legend.position = "right"
+)
+```
+
+```{r}
+country_summary <- vaccinations_clean %>%
+  filter(
+    !is.na(people_fully_vaccinated_per_hundred),
+    !is.na(daily_vaccinations_per_million)
+  ) %>%
+  group_by(location) %>%
+  summarise(
+    max_vaccinated = max(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+    avg_daily_vaccinations = mean(daily_vaccinations_per_million, na.rm = TRUE)
+  )
+```
+
+```{r}
+ggplot(country_summary,
+       aes(x = max_vaccinated, y = avg_daily_vaccinations)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    title = "Vaccination Coverage vs Daily Vaccination Rate",
+    x = "Fully vaccinated per 100 people",
+    y = "Daily vaccinations per million people"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+install.packages("ggrepel")
+
+```
+
+```{r}
+library(ggrepel)
+label_data <- country_summary %>%
+  arrange(desc(avg_daily_vaccinations)) %>%
+  slice(1:6)  
+```
+
+```{r}
+ggplot(country_summary,
+       aes(x = max_vaccinated, y = avg_daily_vaccinations)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red") +
+  
+  geom_text_repel(
+    data = label_data,
+    aes(label = location),
+    size = 4
+  ) +
+  
+  labs(
+    title = "Vaccination Coverage vs Daily Vaccination Rate",
+    x = "Fully vaccinated per 100 people",
+    y = "Daily vaccinations per million people"
+  ) +
+  
+  theme_minimal()
+```
+
+```{r}
+country_summary <- vaccinations_clean %>%
+  filter(
+    !is.na(people_fully_vaccinated_per_hundred),
+    !is.na(daily_vaccinations_per_million)
+  ) %>%
+  group_by(location) %>%
+  summarise(
+    max_vaccinated = max(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+    peak_rate = max(daily_vaccinations_per_million, na.rm = TRUE),
+    total_vaccinations = max(total_vaccinations, na.rm = TRUE)
+  ) %>%
+  filter(total_vaccinations > 1e6)   
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(country_summary,
+       aes(x = max_vaccinated, y = peak_rate)) +
+  geom_point(alpha = 0.6, color = "steelblue") +
+  geom_smooth(method = "lm", color = "red") +
+  
+  labs(
+    title = "Vaccination Performance Across Countries (Filtered)",
+    x = "Fully vaccinated per 100 people",
+    y = "Peak daily vaccinations per million"
+  ) +
+  
+  theme_minimal()
+```
+
+```{r}
+library(ggrepel)
+
+label_data <- country_summary %>%
+  arrange(desc(peak_rate)) %>%
+  slice(1:8)
+
+ggplot(country_summary,
+       aes(x = max_vaccinated, y = peak_rate)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red") +
+  
+  geom_text_repel(
+    data = label_data,
+    aes(label = location),
+    size = 4
+  ) +
+  
+  theme_minimal()
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
