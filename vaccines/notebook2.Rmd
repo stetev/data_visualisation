@@ -1,0 +1,536 @@
+---
+title: "vacc_new"
+output: html_document
+date: "2026-05-09"
+---
+
+## Introduction
+
+This project focuses on the analysis of global COVID-19 vaccination data. 
+The aim is to explore differences in vaccination rollout speed and vaccination coverage across countries and to evaluate how such data could support public-health monitoring and strategic decision-making.
+
+
+The first step was to inspect the structure of the dataset. 
+The dataset contains daily vaccination records for different countries. 
+Basic functions such as `str()`, `summary()`, `head()`, `tail()` and random sampling were used to understand the variables, identify missing values and detect possible formatting problems.
+
+```{r vacc}
+View(vaccinations_new)
+```
+
+
+```{r vacc}
+head(vaccinations_new)
+```
+
+```{r vacc}
+tail(vaccinations_new)
+```
+
+```{r vacc}
+summary(vaccinations_new)
+```
+
+```{r vacc}
+str(vaccinations_new)
+```
+
+```{r vacc}
+names(vaccinations_new)
+```
+
+```{r vacc}
+dim(vaccinations_new)
+```
+
+```{r vacc}
+colSums(is.na(vaccinations_new))
+```
+
+```{r vacc}
+vaccinations_new[sample(nrow(vaccinations_new), 1), ]
+```
+
+## Data quality issues
+
+During the initial inspection, some variables that should contain numeric values were stored as character variables. In addition, several values contained irregular formats such as `I.32`, `II.55` or `01.XII`. Because the exact meaning of some malformed values was uncertain, these values were interpreted carefully and not aggressively modified.
+
+```{r vacc}
+parse_percent_value <- function(x) {
+
+  # pokud je NA nebo prázdné
+  if (is.na(x) || x == "") {
+    return(NA_real_)
+  }
+
+  # odstranění mezer
+  x <- str_trim(x)
+
+  # pokud je normální číslo
+  if (str_detect(x, "^[0-9]+(\\.[0-9]+)?$")) {
+    return(as.numeric(x))
+  }
+
+  # oprava levé části
+  x <- str_replace(x, "^I\\.", "1.")
+  x <- str_replace(x, "^II\\.", "11.")
+  x <- str_replace(x, "^III\\.", "111.")
+  x <- str_replace(x, "^IV\\.", "14.")
+  x <- str_replace(x, "^V\\.", "5.")
+
+  # oprava pravé části
+  x <- str_replace(x, "\\.XII$", ".12")
+  x <- str_replace(x, "\\.XI$", ".11")
+  x <- str_replace(x, "\\.X$", ".10")
+  x <- str_replace(x, "\\.IX$", ".9")
+  x <- str_replace(x, "\\.VIII$", ".8")
+  x <- str_replace(x, "\\.VII$", ".7")
+  x <- str_replace(x, "\\.VI$", ".6")
+  x <- str_replace(x, "\\.V$", ".5")
+  x <- str_replace(x, "\\.IV$", ".4")
+  x <- str_replace(x, "\\.III$", ".3")
+  x <- str_replace(x, "\\.II$", ".2")
+  x <- str_replace(x, "\\.I$", ".1")
+
+  # odstranění nul na začátku
+  x <- str_replace(x, "^0+", "")
+
+  # pokud už je validní číslo
+  if (str_detect(x, "^[0-9]+(\\.[0-9]+)?$")) {
+    return(as.numeric(x))
+  }
+
+  # jinak NA
+  return(NA_real_)
+}
+
+clean_percent_column <- function(x) {
+  sapply(x, parse_percent_value)
+}
+```
+
+```{r vacc}
+vaccinations_clean <- vaccinations_new %>%
+  mutate(
+
+    date = dmy(date),
+
+    total_vaccinations_per_hundred =
+      clean_percent_column(total_vaccinations_per_hundred),
+
+    people_vaccinated_per_hundred =
+      clean_percent_column(people_vaccinated_per_hundred),
+
+    people_fully_vaccinated_per_hundred =
+      clean_percent_column(people_fully_vaccinated_per_hundred),
+
+    total_boosters_per_hundred =
+      clean_percent_column(total_boosters_per_hundred)
+
+  )
+```
+
+```{r vacc}
+summary(vaccinations_clean)
+```
+
+```{r vacc}
+vaccinations_clean[sample(nrow(vaccinations_clean), 1), ]
+
+```
+
+# Country-level summary
+
+
+```{r vacc}
+country_summary <- vaccinations_clean %>%
+  filter(
+    !is.na(people_fully_vaccinated_per_hundred),
+    !is.na(daily_vaccinations_per_million)
+  ) %>%
+  group_by(location) %>%
+  summarise(
+
+    max_vaccinated =
+      max(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+
+    peak_rate =
+      max(daily_vaccinations_per_million, na.rm = TRUE),
+
+    total_vaccinations =
+      max(total_vaccinations, na.rm = TRUE)
+
+  )
+```
+
+```{r vacc}
+country_summary_filtered <- country_summary %>%
+  filter(total_vaccinations > 1e6)
+```
+
+```{r vacc}
+library(ggrepel)
+```
+
+```{r vacc}
+library(ggplot2)
+
+ggplot(country_summary_filtered,
+       aes(x = max_vaccinated,
+           y = peak_rate)) +
+
+  geom_point(alpha = 0.6) +
+
+  geom_smooth(method = "lm",
+              color = "red") +
+
+  labs(
+    title = "Vaccination Performance Across Countries",
+    x = "Fully vaccinated per 100 people",
+    y = "Peak daily vaccinations per million"
+  ) +
+
+  theme_minimal()
+```
+
+
+# The scatter plot shows the relationship between vaccination speed and vaccination coverage. Each point represents one country. The x-axis shows the maximum number of fully vaccinated people per 100 inhabitants, while the y-axis shows the peak daily vaccination rate per million inhabitants. The regression line indicates the general trend between these two variables.
+
+```{r vacc}
+library(ggplot2)
+library(ggrepel)
+
+# 1) Země pod 100
+plot_under_100 <- country_summary_filtered %>%
+  filter(max_vaccinated < 100)
+
+ggplot(plot_under_100,
+       aes(x = max_vaccinated,
+           y = peak_rate)) +
+
+  geom_point(alpha = 0.6) +
+
+  geom_smooth(method = "lm",
+              color = "red") +
+
+  geom_text_repel(
+    aes(label = location),
+    size = 3,
+    max.overlaps = Inf
+  ) +
+
+  labs(
+    title = "Vaccination Performance: Countries Below 100 Fully Vaccinated per 100",
+    x = "Fully vaccinated per 100 people",
+    y = "Peak daily vaccinations per million"
+  ) +
+
+  theme_minimal()
+```
+
+
+
+# Top high-coverage countries by vaccination speed
+
+
+```{r vacc}
+library(dplyr)
+library(ggplot2)
+
+top_high <- country_summary_filtered %>%
+  filter(max_vaccinated >= 100) %>%
+  arrange(desc(peak_rate)) %>%
+  slice(1:20)
+
+ggplot(top_high,
+       aes(x = reorder(location, peak_rate),
+           y = peak_rate)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 20 High-Coverage Countries by Peak Vaccination Rate",
+    subtitle = "Countries with at least 70 fully vaccinated people per 100 inhabitants",
+    x = "Country",
+    y = "Peak daily vaccinations per million"
+  ) +
+  theme_minimal()
+```
+
+```{r vacc}
+ggplot(top_high,
+       aes(x = reorder(location, peak_rate),
+           y = peak_rate)) +
+  geom_segment(aes(xend = location, y = 0, yend = peak_rate),
+               color = "grey70") +
+  geom_point(size = 3, color = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top High-Coverage Countries by Vaccination Speed",
+    subtitle = "Peak daily vaccinations per million among countries with high coverage",
+    x = "Country",
+    y = "Peak daily vaccinations per million"
+  ) +
+  theme_minimal()
+```
+
+```{r vacc}
+
+```
+
+```{r vacc}
+names(vaccinations_clean)
+```
+
+Missing values in vaccination-related variables were expected and primarily reflected delayed vaccination rollout or irregular reporting frequency across countries rather than errors in the dataset itself.
+
+-------------------------------------
+12.05.2026
+```{r vacc}
+vaccinations_clean <- vaccinations_clean %>%
+  filter(
+    !location %in% c(
+      "Europe",
+      "European Union",
+      "World",
+      "Upper middle income",
+      "South America",
+      "North America",
+      "Lower middle income",
+      "Low income",
+      "High income"
+    )
+  )
+```
+
+
+```{r vacc}
+missing_summary <- data.frame(
+  variable = names(vaccinations_clean),
+  missing_count = colSums(is.na(vaccinations_clean)),
+  missing_percent = round(colMeans(is.na(vaccinations_clean)) * 100, 2)
+)
+
+missing_summary
+```
+
+
+The analysis of missing values revealed substantial differences in reporting completeness across variables. Booster-related variables contained the highest proportion of missing observations, likely because booster vaccination campaigns started later and were not consistently reported by all countries.
+
+Variables related to daily vaccination activity contained relatively few missing values, making them more reliable for comparative analysis.
+
+The observed missing values are interpreted primarily as a consequence of delayed vaccination rollout and inconsistent reporting frequency rather than errors in the dataset itself.
+```{r vacc}
+ggplot(missing_summary,
+       aes(x = reorder(variable, missing_percent),
+           y = missing_percent)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Missing Values by Variable",
+    x = "Variable",
+    y = "Missing values (%)"
+  ) +
+  theme_minimal()
+```
+
+```{r vacc}
+vaccination_start <- vaccinations_clean %>%
+  filter(!is.na(total_vaccinations),
+         total_vaccinations > 0) %>%
+  group_by(location) %>%
+  summarise(
+    first_vaccination_date = min(date, na.rm = TRUE)
+  ) %>%
+  arrange(first_vaccination_date)
+
+vaccination_start
+```
+
+```{r vacc}
+vaccination_start %>%
+  slice(1:20) %>%
+  ggplot(aes(x = reorder(location, first_vaccination_date),
+             y = first_vaccination_date)) +
+  geom_point(size = 3, color = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "First Reported Vaccination Date by Country",
+    x = "Country",
+    y = "First vaccination date"
+  ) +
+  theme_minimal()
+```
+
+
+```{r vacc}
+country_summary <- vaccinations_clean %>%
+  group_by(location) %>%
+  summarise(
+    max_total_vaccinations_per_100 =
+      max(total_vaccinations_per_hundred, na.rm = TRUE),
+    
+    max_fully_vaccinated_per_100 =
+      max(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+    
+    peak_daily_vaccinations_per_million =
+      max(daily_vaccinations_per_million, na.rm = TRUE),
+    
+    total_vaccinations =
+      max(total_vaccinations, na.rm = TRUE)
+  ) %>%
+  filter(
+    is.finite(max_total_vaccinations_per_100),
+    is.finite(max_fully_vaccinated_per_100),
+    is.finite(peak_daily_vaccinations_per_million)
+  )
+```
+
+```{r vacc}
+country_summary_filtered <- country_summary %>%
+  filter(total_vaccinations > 1000000)
+
+ggplot(country_summary_filtered,
+       aes(x = max_fully_vaccinated_per_100,
+           y = peak_daily_vaccinations_per_million)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    title = "Vaccination Speed and Final Vaccination Coverage",
+    x = "Fully vaccinated per 100 people",
+    y = "Peak daily vaccinations per million"
+  ) +
+  theme_minimal()
+```
+
+```{r vacc}
+top_speed <- country_summary_filtered %>%
+  arrange(desc(peak_daily_vaccinations_per_million)) %>%
+  slice(1:20)
+
+ggplot(top_speed,
+       aes(x = reorder(location, peak_daily_vaccinations_per_million),
+           y = peak_daily_vaccinations_per_million)) +
+  geom_segment(aes(xend = location,
+                   y = 0,
+                   yend = peak_daily_vaccinations_per_million),
+               color = "grey70") +
+  geom_point(size = 3, color = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 20 Countries by Peak Vaccination Speed",
+    x = "Country",
+    y = "Peak daily vaccinations per million"
+  ) +
+  theme_minimal()
+```
+
+
+```{r vacc}
+cor(
+  country_summary_filtered$max_fully_vaccinated_per_100,
+  country_summary_filtered$peak_daily_vaccinations_per_million,
+  use = "complete.obs"
+)
+```
+
+A linear regression model was used to examine the relationship between vaccination rollout speed and final vaccination coverage across countries.
+
+The results indicate a statistically significant positive relationship between the peak daily vaccination rate and the proportion of fully vaccinated individuals per 100 inhabitants (p < 0.001).
+
+However, the model explained approximately 17% of the variability in vaccination coverage (R² = 0.174), suggesting that additional factors beyond rollout speed also influence vaccination outcomes across countries.
+
+```{r vacc}
+model <- lm(
+  max_fully_vaccinated_per_100 ~ peak_daily_vaccinations_per_million,
+  data = country_summary_filtered
+)
+
+summary(model)
+```
+#time analysis
+The time-series analysis reveals substantial differences in vaccination rollout strategies across countries.
+
+Israel exhibited the fastest early vaccination rollout and achieved high vaccination coverage within a relatively short period of time. The United States also demonstrated rapid vaccination progress, although with a more gradual increase compared to Israel.
+
+Germany showed a slower initial rollout followed by a later acceleration phase. In contrast, India experienced a considerably slower vaccination campaign and achieved substantially lower vaccination coverage during the observed period.
+
+These differences highlight the impact of country-specific factors such as population size, healthcare infrastructure, logistics, and vaccine availability.
+```{r vacc}
+Sys.setlocale("LC_TIME", "English")
+
+selected_countries <- vaccinations_clean %>%
+  filter(location %in% c("United States",
+                         "Germany",
+                         "India",
+                         "Israel"))
+
+ggplot(selected_countries,
+       aes(x = date,
+           y = people_fully_vaccinated_per_hundred,
+           color = location)) +
+
+  geom_line(size = 1) +
+
+  labs(
+    title = "Vaccination Progress Over Time",
+    x = "Date",
+    y = "Fully vaccinated per 100 people",
+    color = "Country"
+  ) +
+
+  theme_minimal()
+```
+
+
+```{r vacc}
+
+```
+
+```{r vacc}
+
+```
+
+```{r vacc}
+
+```
+
+
+```{r vacc}
+
+```
+
+```{r vacc}
+
+```
+
+```{r vacc}
+
+```
+
+
+```{r vacc}
+
+```
+
+```{r vacc}
+
+```
+
+```{r vacc}
+
+```
+
+
+```{r vacc}
+
+```
+
+```{r vacc}
+
+```
+
+```{r vacc}
+
+```
+
+
