@@ -278,7 +278,7 @@ ggplot(top_high,
 ```
 
 ```{r vacc}
-names(vaccinations_clean)
+sort(unique(vaccinations_clean$location))
 ```
 
 Missing values in vaccination-related variables were expected and primarily reflected delayed vaccination rollout or irregular reporting frequency across countries rather than errors in the dataset itself.
@@ -297,7 +297,24 @@ vaccinations_clean <- vaccinations_clean %>%
       "North America",
       "Lower middle income",
       "Low income",
+      "High income",
+      "Lower middle income"      
+      
+    )
+  )
+```
+
+```{r vacc}
+vaccinations_clean <- vaccinations_clean %>%
+  filter(
+    !location %in% c(
+      "Asia",
+      "Africa",
+      "Low income",
+      "South America",
+      "Upper middle income",
       "High income"
+      
     )
   )
 ```

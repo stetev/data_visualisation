@@ -3,8 +3,11 @@
 library(dplyr)
 library(stringr)
 library(lubridate)
+```
 
+```{r}
 clean_percent_column <- function(x) {
+
   x %>%
     str_trim() %>%
     
@@ -41,11 +44,39 @@ vaccinations_clean <- vaccinations %>%
     total_boosters_per_hundred = clean_percent_column(total_boosters_per_hundred)
   )
 ```
-
-
-```{r}
-summary(vaccinations_clean$total_vaccinations_per_hundred)
+```{r vacc}
+vaccinations_clean <- vaccinations_clean %>%
+  filter(
+    !location %in% c(
+      "Europe",
+      "European Union",
+      "World",
+      "Upper middle income",
+      "South America",
+      "North America",
+      "Lower middle income",
+      "Low income",
+      "High income",
+      "Lower middle income",      
+      "Asia",
+      "Africa",
+      "Low income",
+      "South America",
+      "Upper middle income",
+      "High income",
+      "South Africa",
+      "European Union",
+      "Europe",
+      "North America",
+      "Oceania",
+      "World",
+      "Lower middle income",
+      "United Kingdom"
+      
+    )
+  )
 ```
+
 
 
 ```{r}
@@ -157,35 +188,151 @@ problem_values
 ```{r}
 summary(vaccinations_clean$total_vaccinations_per_hundred)
 ```
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+   0.00    3.96   20.22   37.18   60.86  233.93   18225  
+= number of doses administered per 100 population.
+
+The variable total_vaccinations_per_hundred measures the number of vaccine doses administered per 100 inhabitants. 
+The mean value (37.18) exceeds the median (20.22), indicating a right-skewed distribution. 
+This suggests that while most observations have relatively low to moderate vaccination coverage, a smaller number of countries achieved substantially higher vaccination rates. 
+The highest recorded value was 233.93 doses per 100 inhabitants, largely due to the administration of booster doses.
+```{r}
+hist(
+  vaccinations_clean$total_vaccinations_per_hundred,
+  breaks = 30,
+  main = "Distribution of Total Vaccinations per Hundred",
+  xlab = "Vaccinations per Hundred"
+)
+```
+The histogram reveals a highly positively skewed distribution of total_vaccinations_per_hundred. 
+Most observations are clustered at low vaccination levels, whereas a smaller number of countries achieved substantially higher vaccination coverage. This pattern is reflected by the mean (37.18) exceeding the median (20.22). 
+The maximum value of 233.93 doses per 100 inhabitants suggests extensive booster vaccination campaigns in some countries. 
+Additionally, 18,225 observations were missing for this variable.
+
+
 
 ```{r}
+summary(vaccinations_clean$people_fully_vaccinated_per_hundred)
+```
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+   0.00    1.57    7.77   16.21   25.27  116.40   22281 
+
+The variable people_fully_vaccinated_per_hundred exhibits a strongly positively skewed distribution. 
+The mean (16.21) exceeds the median (7.77), suggesting that a relatively small number of observations with high vaccination coverage increase the overall average. 
+Most observations are concentrated at lower values, indicating that many countries were still in the early phases of their vaccination campaigns during a substantial part of the observed period. 
+The highest recorded value was 116.40 fully vaccinated individuals per 100 inhabitants. 
+In addition, 22,281 observations contained missing values.
+
+
+```{r}
+hist(
+  vaccinations_clean$people_fully_vaccinated_per_hundred,
+  breaks = 30,
+  main = "Distribution of People fully vaccinated per Hundred",
+  xlab = "Vaccinations per Hundred"
+)
+```
+The histogram of people_fully_vaccinated_per_hundred reveals a strongly right-skewed distribution. 
+Most observations are concentrated at very low vaccination levels, with the highest frequencies occurring below 10 fully vaccinated individuals per 100 inhabitants. 
+The distribution exhibits a long right tail, indicating the presence of a smaller number of observations with substantially higher vaccination coverage. 
+This pattern is reflected in the summary statistics, where the mean (16.21) exceeds the median (7.77). 
+The maximum recorded value was 116.40 fully vaccinated individuals per 100 inhabitants, which may be attributed to population estimation differences and reporting adjustments. 
+Furthermore, 22,281 observations contained missing values.
+   
+```{r}
+Sys.getlocale("LC_TIME")
+```
+   
+   
+```{r}
+library(dplyr)
 library(ggplot2)
 
 vaccinations_clean %>%
-  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
-  ggplot(aes(x = date, y = people_fully_vaccinated_per_hundred, color = location)) +
-  geom_line() +
+  group_by(date) %>%
+  summarise(
+    avg_fully_vaccinated =
+      mean(people_fully_vaccinated_per_hundred,
+           na.rm = TRUE)
+  ) %>%
+  ggplot(aes(x = date,
+             y = avg_fully_vaccinated)) +
+  geom_line(color = "steelblue",
+            linewidth = 1) +
+  scale_x_date(date_labels = "%b %Y") +
   labs(
-    title = "Vaccination Progress Over Time",
+    title = "Average Full Vaccination Coverage Over Time",
     x = "Date",
     y = "Fully Vaccinated per 100"
   ) +
   theme_minimal()
 ```
+The average share of fully vaccinated individuals increased steadily throughout the observed period. 
+Initially, vaccination coverage remained close to zero, reflecting the early phase of vaccine deployment. 
+As vaccination campaigns expanded across countries, the average proportion of fully vaccinated individuals rose rapidly, reaching approximately 40 fully vaccinated persons per 100 inhabitants by the end of the observation period. 
+Minor fluctuations in the trend are likely caused by differences in reporting schedules and data availability across countries. 
+Overall, the figure demonstrates the global progress of COVID-19 vaccination campaigns over time.
+
+
 ```{r}
-countries <- c("Germany", "France", "United States", "India")
+selected <- c(
+  "United States",
+  "Germany",
+  "France",
+  "Czechia",
+  "India"
+)
 
 vaccinations_clean %>%
-  filter(location %in% countries,
-         !is.na(total_vaccinations_per_hundred)) %>%
-  ggplot(aes(x = date, y = total_vaccinations_per_hundred, color = location)) +
-  geom_line(size = 1.2) +
+  filter(location %in% selected) %>%
+  ggplot(aes(
+    x = date,
+    y = people_fully_vaccinated_per_hundred,
+    color = location
+  )) +
+  geom_line() +
+  scale_x_date(date_labels = "%b %Y")+
+  theme_minimal() +
   labs(
-    title = "Vaccination Progress Comparison",
+    title = "Vaccination Progress in Selected Countries",
     x = "Date",
-    y = "Total vaccinations per 100 people"
-  ) +
-  theme_minimal()
+    y = "Fully Vaccinated per 100"
+  )
+```
+
+```{r}
+top10 <- vaccinations_clean %>%
+  group_by(location) %>%
+  summarise(
+    max_vacc = max(
+      people_fully_vaccinated_per_hundred,
+      na.rm = TRUE
+    )
+  ) %>%
+  arrange(desc(max_vacc)) %>%
+  slice(1:10) %>%
+  pull(location)
+
+vaccinations_clean %>%
+  filter(location %in% top10) %>%
+  ggplot(aes(
+    x = date,
+    y = people_fully_vaccinated_per_hundred,
+    color = location
+  )) +
+  geom_line() +
+  theme_minimal() +
+  scale_x_date(date_labels = "%b %Y")+
+  labs(
+    title = "Top 10 Countries by Full Vaccination Coverage",
+    x = "Date",
+    y = "Fully Vaccinated per 100"
+  )
+```
+
+
+```{r}
+
 ```
 
 ```{r}
@@ -202,7 +349,7 @@ vaccinations_clean %>%
   filter(location %in% top_countries,
          !is.na(total_vaccinations_per_hundred)) %>%
   ggplot(aes(x = date, y = total_vaccinations_per_hundred, color = location)) +
-  geom_line(size = 1.2) +
+  geom_line(size = 0.7) +
   labs(
     title = "Top performers",
     x = "Date",
@@ -233,10 +380,25 @@ country_summary <- vaccinations_clean %>%
 ```
 
 ```{r}
+
+corr <- cor(
+  country_summary$max_vaccinated,
+  country_summary$avg_daily_vaccinations,
+  use = "complete.obs"
+)
+
+
 ggplot(country_summary,
-       aes(x = max_vaccinated, y = avg_daily_vaccinations)) +
+       aes(x = max_vaccinated,
+           y = avg_daily_vaccinations)) +
   geom_point(alpha = 0.6) +
   geom_smooth(method = "lm", color = "red") +
+  annotate(
+    "text",
+    x = 80,
+    y = max(country_summary$avg_daily_vaccinations, na.rm = TRUE),
+    label = paste("r =", round(corr, 3))
+  ) +
   labs(
     title = "Vaccination Coverage vs Daily Vaccination Rate",
     x = "Fully vaccinated per 100 people",
@@ -244,6 +406,25 @@ ggplot(country_summary,
   ) +
   theme_minimal()
 ```
+There is a moderate positive correlation between the average daily vaccination rate and the maximum vaccination coverage achieved by a country (r = 0.517).
+
+```{r}
+cor.test(
+  country_summary$max_vaccinated,
+  country_summary$avg_daily_vaccinations
+)
+```
+
+A scatter plot was used to examine the relationship between the average daily vaccination rate and the maximum vaccination coverage achieved by each country. 
+The analysis revealed a moderate positive correlation (r = 0.517, p < 0.001), indicating that countries with higher daily vaccination rates generally tended to achieve higher vaccination coverage. 
+The fitted regression line confirms this positive trend. 
+However, the substantial dispersion of observations suggests that vaccination speed alone does not fully explain the differences in vaccination coverage across countries. 
+Additional factors, such as vaccine availability, public acceptance, and national vaccination policies, likely contributed to the observed variation.
+
+
+
+
+
 
 ```{r}
 install.packages("ggrepel")
@@ -277,6 +458,12 @@ ggplot(country_summary,
   
   theme_minimal()
 ```
+The scatter plot shows a moderate positive relationship between maximum vaccination coverage and the average daily vaccination rate. 
+Several small territories, such as Niue, Bhutan, the Falkland Islands, Nauru, Pitcairn, and the Cook Islands, appear as clear outliers with unusually high daily vaccination rates per million people. 
+This is likely influenced by their small population sizes, where even a relatively small absolute number of vaccinations can result in very high per-million values. 
+Despite these outliers, the regression line indicates a positive overall trend: countries with higher daily vaccination rates generally tended to achieve higher vaccination coverage.
+
+
 
 ```{r}
 country_summary <- vaccinations_clean %>%
@@ -309,6 +496,11 @@ ggplot(country_summary,
   
   theme_minimal()
 ```
+After filtering out countries and territories with fewer than one million total vaccinations, the relationship between vaccination coverage and peak daily vaccination rate remains positive. 
+The regression line indicates that countries with higher peak vaccination capacity generally tended to achieve higher full vaccination coverage. 
+However, the dispersion of points shows that peak vaccination speed alone does not fully explain final vaccination coverage. 
+Other factors, such as vaccine availability, public trust, policy decisions, and healthcare infrastructure, likely influenced the observed differences between countries.
+
 
 ```{r}
 library(ggrepel)
@@ -330,11 +522,488 @@ ggplot(country_summary,
   
   theme_minimal()
 ```
+The scatter plot compares the maximum vaccination coverage achieved by each country with its peak daily vaccination rate. 
+A positive relationship can be observed, suggesting that countries capable of administering vaccines at a higher daily rate generally achieved higher vaccination coverage. 
+Several countries, including Bhutan, Mongolia, Sri Lanka, Cuba, and Israel, stand out as notable outliers due to exceptionally high vaccination rates during the peak of their vaccination campaigns. 
+These observations indicate that rapid vaccine deployment was associated with successful vaccination outcomes, although considerable variation between countries remains evident. 
+Such variation suggests that additional factors, including vaccine availability, public acceptance, and government policies, also played an important role in determining final vaccination coverage.
+
+
+
+```{r}
+"
+corelace
+boxplots
+how many na
+try to find which columns have NA
+-find relation about NA
+na are ussualy more in older people
+
+remove europe, european!
+
+understand why there are NA
+plot it with NA or without NA
+understand the basic coefitients, what does the baic values means, what does it indicate
+
+if are there any exceptions in data set
+plotting 
+does pca and clustering be useful for like (country similialirity, country similarity, welth of country)
+
+when making model, understand the coeffitiens, how to read the residuals
+"
+
+```
+
+
+
+
+```{r}
+
+colSums(is.na(vaccinations_clean))
+```
+```{r}
+na_counts <- colSums(is.na(vaccinations_clean))
+
+round(
+  na_counts / nrow(vaccinations_clean) * 100,
+  2
+)
+```
+Missing value analysis revealed substantial differences in data completeness across variables. 
+The identifier variables (location, iso_code, and date) contained no missing values. 
+Daily vaccination indicators (daily_vaccinations and daily_vaccinations_per_million) were nearly complete, with only 0.61% missing observations. 
+In contrast, cumulative vaccination measures such as total_vaccinations, people_vaccinated, and people_fully_vaccinated contained between 42% and 51% missing values. 
+These missing values are likely associated with countries that had not yet started vaccination campaigns or did not consistently report cumulative vaccination statistics. 
+The highest proportion of missing values was observed in booster-related variables (total_boosters and total_boosters_per_hundred), where 98.82% of observations were missing. 
+This is expected because booster vaccination programs were introduced later during the pandemic and were not reported consistently across all countries. 
+Therefore, the observed missing values primarily reflect differences in reporting practices and vaccination rollout timelines rather than data quality problems.
+
+```{r}
+vaccinations_clean %>%
+  mutate(
+    missing = is.na(people_fully_vaccinated_per_hundred)
+  ) %>%
+  group_by(date) %>%
+  summarise(
+    missing_pct = mean(missing) * 100
+  )
+```
+
+
+```{r}
+ggplot(
+  vaccinations_clean,
+  aes(y = people_fully_vaccinated_per_hundred)
+) +
+  geom_boxplot()
+```
+The boxplot confirms that the distribution of people_fully_vaccinated_per_hundred is highly right-skewed. 
+The median vaccination coverage was approximately 7.77 fully vaccinated individuals per 100 inhabitants, while the interquartile range extended from 1.57 to 25.27. 
+A large number of observations were identified as statistical outliers above approximately 60 fully vaccinated individuals per 100 inhabitants. 
+These outliers likely correspond to countries that achieved exceptionally high vaccination coverage during the observed period. 
+The presence of numerous upper-tail outliers is consistent with the right-skewed distribution observed in the histogram and summary statistics.
+
+
+
+```{r}
+outliers <- boxplot.stats(
+  vaccinations_clean$people_fully_vaccinated_per_hundred
+)$out
+
+vaccinations_clean %>%
+  filter(
+    people_fully_vaccinated_per_hundred %in% outliers
+  ) %>%
+  select(location,
+         people_fully_vaccinated_per_hundred) %>%
+  distinct() %>%
+  arrange(desc(people_fully_vaccinated_per_hundred))
+```
+
+
+
+```{r}
+country_summary %>%
+  arrange(desc(peak_rate)) %>%
+  head(10)
+```
+Outlier analysis revealed several countries with exceptionally high peak vaccination rates. 
+Bhutan exhibited the highest peak rate, reaching 78,604 daily vaccinations per million inhabitants, followed by Mongolia (37,684) and Sri Lanka (22,125). 
+These values are substantially higher than those observed in most countries and can largely be explained by intensive vaccination campaigns combined with relatively small population sizes. 
+Since these observations correspond to real vaccination efforts rather than measurement errors, they were retained in the dataset and interpreted as meaningful extreme cases rather than anomalies requiring removal.
+
+
+
+```{r}
+as.data.frame(
+  vaccinations_clean %>%
+    group_by(location) %>%
+    summarise(
+      na_pct = mean(
+        is.na(people_fully_vaccinated_per_hundred)
+      ) * 100
+    ) %>%
+    arrange(desc(na_pct))
+)
+
+
+na_country <- vaccinations_clean %>%
+  group_by(location) %>%
+  summarise(
+    na_pct = mean(
+      is.na(people_fully_vaccinated_per_hundred)
+    ) * 100
+  ) %>%
+  arrange(desc(na_pct))
+
+View(na_country)
+```
+
+```{r}
+na_country <- vaccinations_clean %>%
+  group_by(location) %>%
+  summarise(
+    na_pct = mean(
+      is.na(people_fully_vaccinated_per_hundred)
+    ) * 100
+  ) %>%
+  arrange(desc(na_pct))
+
+ggplot(
+  na_country %>% slice(1:20),
+  aes(
+    x = reorder(location, na_pct),
+    y = na_pct
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Countries with Highest Percentage of Missing Values",
+    x = "Country",
+    y = "Missing Values (%)"
+  ) +
+  theme_minimal()
+```
+```{r}
+na_country %>%
+  arrange(na_pct) %>%
+  head(20)
+```
+
+
+
+```{r}
+summary(na_country$na_pct)
+```
+For at least half of the countries, more than 62% of observations for people_fully_vaccinated_per_hundred are missing.
+
+
+```{r}
+ggplot(
+  na_country,
+  aes(x = na_pct)
+) +
+  geom_histogram(
+    bins = 30,
+    fill = "steelblue"
+  ) +
+  labs(
+    title = "Distribution of Missing Values Across Countries",
+    x = "Percentage of Missing Values",
+    y = "Number of Countries"
+  ) +
+  theme_minimal()
+```
+The distribution of missing values across countries is highly uneven. 
+While some countries reported vaccination statistics almost completely, others contained very high proportions of missing observations. 
+The median percentage of missing values was 62.77%, indicating that more than half of the countries had missing data for the majority of observations. 
+The histogram suggests the presence of two distinct groups: countries with relatively complete reporting and countries with very limited reporting. 
+This pattern indicates that missing values are not randomly distributed but are strongly associated with country-specific reporting practices and data availability.
+
+
+```{r}
+vaccinations_clean %>%
+  filter(location == "Cote d'Ivoire") %>%
+  summarise(
+    total = n(),
+    na_count = sum(is.na(people_fully_vaccinated_per_hundred))
+  )
+```
+
+
+```{r}
+country_features <- vaccinations_clean %>%
+  group_by(location) %>%
+  summarise(
+    max_vaccinated =
+      ifelse(
+        all(is.na(people_fully_vaccinated_per_hundred)),
+        NA,
+        max(
+          people_fully_vaccinated_per_hundred,
+          na.rm = TRUE
+        )
+      )
+  )
+```
+
+```{r}
+country_features <- vaccinations_clean %>%
+  group_by(location) %>%
+  summarise(
+    max_vaccinated =
+      if (all(is.na(people_fully_vaccinated_per_hundred))) {
+        NA_real_
+      } else {
+        max(people_fully_vaccinated_per_hundred, na.rm = TRUE)
+      },
+
+    peak_rate =
+      if (all(is.na(daily_vaccinations_per_million))) {
+        NA_real_
+      } else {
+        max(daily_vaccinations_per_million, na.rm = TRUE)
+      },
+
+    total_vaccinations =
+      if (all(is.na(total_vaccinations))) {
+        NA_real_
+      } else {
+        max(total_vaccinations, na.rm = TRUE)
+      },
+
+    .groups = "drop"
+  ) %>%
+  filter(
+    !is.na(max_vaccinated),
+    !is.na(peak_rate),
+    !is.na(total_vaccinations)
+  )
+```
+
+
+```{r}
+vaccinations_clean %>%
+  group_by(location) %>%
+  summarise(
+    all_na_peak_rate = all(is.na(daily_vaccinations_per_million)),
+    .groups = "drop"
+  ) %>%
+  filter(all_na_peak_rate)
+```
+
+```{r}
+country_features <- vaccinations_clean %>%
+  group_by(location) %>%
+  summarise(
+    max_vaccinated =
+      if (all(is.na(people_fully_vaccinated_per_hundred))) {
+        NA_real_
+      } else {
+        max(people_fully_vaccinated_per_hundred, na.rm = TRUE)
+      },
+
+    peak_rate =
+      if (all(is.na(daily_vaccinations_per_million))) {
+        NA_real_
+      } else {
+        max(daily_vaccinations_per_million, na.rm = TRUE)
+      },
+
+    total_vaccinations =
+      if (all(is.na(total_vaccinations))) {
+        NA_real_
+      } else {
+        max(total_vaccinations, na.rm = TRUE)
+      },
+
+    .groups = "drop"
+  ) %>%
+  filter(
+    !is.na(max_vaccinated),
+    !is.na(peak_rate),
+    !is.na(total_vaccinations)
+  )
+```
+
+
+```{r}
+View(country_features)
+summary(country_features)
+nrow(country_features)
+```
+```{r}
+bad_countries <- c(
+  "Cote d'Ivoire",
+  "Ethiopia",
+  "Kiribati",
+  "Madagascar",
+  "Tokelau",
+  "Tuvalu",
+  "Bonaire Sint Eustatius and Saba",
+  "Turkmenistan"
+)
+```
+
+
+```{r}
+country_features <- vaccinations_clean %>%
+  filter(!location %in% bad_countries) %>%
+  group_by(location) %>%
+  summarise(
+    max_fully_vaccinated =
+      max(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+
+    max_people_vaccinated =
+      max(people_vaccinated_per_hundred, na.rm = TRUE),
+
+    max_total_vaccinations =
+      max(total_vaccinations_per_hundred, na.rm = TRUE),
+
+    peak_daily_rate =
+      max(daily_vaccinations_per_million, na.rm = TRUE),
+
+    mean_daily_rate =
+      mean(daily_vaccinations_per_million, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+```
+
+
+
+```{r}
+country_features <- country_features %>%
+  filter(if_all(-location, is.finite))
+```
+
+
+
+```{r}
+pca_data <- country_features %>%
+  select(
+    max_fully_vaccinated,
+    max_people_vaccinated,
+    max_total_vaccinations,
+    peak_daily_rate,
+    mean_daily_rate
+  )
+```
+
+```{r}
+pca <- prcomp(
+  pca_data,
+  center = TRUE,
+  scale. = TRUE
+)
+
+summary(pca)
+```
+
+
+
+```{r}
+pca$rotation
+```
+The PCA results showed that the first principal component (PC1) explained 80.27% of the total variance in the dataset, while the second principal component (PC2) explained an additional 13.98%.
+Together, the first two components accounted for 94.25% of the total variability.
+
+This indicates that most differences between countries can be effectively represented in a two-dimensional PCA space.
+
+```{r}
+scores <- as.data.frame(pca$x)
+scores$location <- country_features$location
+
+ggplot(scores,
+       aes(PC1, PC2)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(
+    title = "PCA of Vaccination Characteristics"
+  )
+```
+The PCA scatter plot reveals a clear gradient along PC1, reflecting differences in overall vaccination performance. 
+Most countries form a dense central cluster, while several countries appear as outliers on the right side of the plot. 
+These outliers correspond to countries with exceptionally successful vaccination campaigns and/or unusually high vaccination rates.
+
+The plot suggests that vaccination performance varies continuously across countries rather than forming sharply separated groups. 
+However, a small number of countries exhibit substantially different vaccination characteristics compared to the majority of observations.
 
 ```{r}
 
 ```
 
+
+
+```{r}
+scores %>%
+  arrange(desc(PC1)) %>%
+  select(location, PC1, PC2) %>%
+  head(10)
+```
+
+```{r}
+scores %>%
+  arrange(desc(PC2)) %>%
+  select(location, PC1, PC2) %>%
+  head(10)
+```
+Countries with the highest PC1 scores included Bhutan, Gibraltar, Niue, Falkland Islands, Pitcairn, and the United Arab Emirates. 
+Since PC1 represents overall vaccination performance, these countries achieved exceptionally high values across multiple vaccination indicators. 
+Many of these observations correspond to small island territories, where vaccination metrics expressed per hundred inhabitants or per million inhabitants can reach unusually high values.
+
+Countries with the highest PC2 scores included Scotland, Wales, England, Portugal, Malta, and Qatar. 
+These countries achieved high vaccination coverage while not necessarily exhibiting the most extreme vaccination rates. 
+This suggests that PC2 captures differences between vaccination speed and final vaccination coverage.
+
+```{r}
+scaled_data <- scale(pca_data)
+
+km <- kmeans(
+  scaled_data,
+  centers = 3,
+  nstart = 50
+)
+```
+
+
+```{r}
+ggplot(scores, aes(PC1, PC2, color = cluster)) +
+  geom_point(size = 2) +
+  theme_minimal()
+```
+K-means clustering was performed on the standardized vaccination indicators. 
+PCA was subsequently used to visualize the resulting clusters in a two-dimensional space.
+
+```{r}
+country_features$cluster <- factor(km$cluster)
+
+country_features %>%
+  group_by(cluster) %>%
+  summarise(
+    avg_fully_vaccinated =
+      mean(max_fully_vaccinated),
+
+    avg_peak_rate =
+      mean(peak_daily_rate),
+
+    avg_total_vaccinations =
+      mean(max_total_vaccinations)
+  )
+```
+```{r}
+km <- kmeans(
+  pca$x[,1:2],
+  centers = 3
+)
+```
+
+```{r}
+table(km$cluster)
+```
+
 ```{r}
 
 ```
+
