@@ -1,0 +1,59 @@
+```{r}
+library(forecast)
+```
+
+```{r}
+germany <- vaccinations_country %>%
+  filter(location == "Germany") %>%
+  arrange(date)
+
+ts_germany <- ts(
+  germany$people_fully_vaccinated_per_hundred,
+  frequency = 7
+)
+```
+
+```{r}
+fit <- auto.arima(ts_germany)
+summary(fit)
+```
+
+```{r}
+forecast_30 <- forecast(
+  fit,
+  h = 30
+)
+
+plot(forecast_30)
+```
+
+```{r}
+fit_ets <- ets(ts_germany)
+
+fc_ets <- forecast(
+  fit_ets,
+  h = 30
+)
+
+autoplot(fc_ets)
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```

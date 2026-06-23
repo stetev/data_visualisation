@@ -1,0 +1,452 @@
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(forcats)
+library(tidyr)
+library(scales)
+
+```
+
+
+```{r}
+Sys.setlocale("LC_TIME", "German")
+
+```
+
+
+```{r}
+regional_aggregates <- c(
+  "World", "Europe", "European Union", "Asia", "Africa",
+  "North America", "South America", "Oceania",
+  "High income", "Upper middle income",
+  "Lower middle income", "Low income"
+)
+```
+
+```{r}
+vaccinations_country <- vaccinations_clean %>%
+  filter(!location %in% regional_aggregates)
+```
+
+```{r}
+selected_countries <- c(
+  "Germany",
+  "Czechia",
+  "South Africa",
+  "India",
+  "Brazil",
+  "United States"
+)
+```
+
+```{r}
+vaccinations_country %>%
+  filter(location %in% selected_countries) %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  ggplot(aes(
+    x = date,
+    y = people_fully_vaccinated_per_hundred,
+    color = location
+  )) +
+  geom_line(linewidth = 1) +
+  scale_x_date(date_labels = "%b %Y") +
+  labs(
+    title = "COVID-19 Full Vaccination Trends in Selected Countries",
+    subtitle = "Share of people fully vaccinated per 100 inhabitants",
+    x = "Date",
+    y = "Fully vaccinated per 100",
+    color = "Country"
+  ) +
+   geom_hline(
+    yintercept = 50,
+    linetype = "dashed",
+    color = "black"
+  )+
+  theme_minimal()
+```
+
+Figure 1 illustrates substantial differences in vaccination rollout trajectories across countries. The United States achieved rapid vaccination coverage early in 2021, while Germany and Czechia accelerated later and eventually surpassed the United States. In contrast, India and South Africa experienced considerably slower growth throughout the observed period. These patterns suggest unequal access to vaccines and differences in healthcare capacity and vaccination infrastructure.
+
+```{r}
+max(vaccinations_country$date)
+min(vaccinations_country$date)
+```
+
+```{r}
+n_distinct(vaccinations_country$location)
+```
+```{r}
+latest_country <- vaccinations_country %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  group_by(location) %>%
+  slice_max(date, n = 1) %>%
+  ungroup()
+
+nrow(latest_country)
+
+summary(latest_country$people_fully_vaccinated_per_hundred)
+```
+
+
+
+```{r}
+top10 <- latest_country %>%
+  arrange(desc(people_fully_vaccinated_per_hundred)) %>%
+  slice_head(n = 10)
+
+ggplot(
+  top10,
+  aes(
+    x = reorder(
+      location,
+      people_fully_vaccinated_per_hundred
+    ),
+    y = people_fully_vaccinated_per_hundred
+  )
+) +
+  geom_col(fill = "#2C7FB8") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Countries by Vaccination Coverage",
+    subtitle = "Latest available observation",
+    x = "Country",
+    y = "Fully vaccinated per 100 inhabitants"
+  ) +
+  theme_minimal()
+```
+```{r}
+bottom10 <- latest_country %>%
+  arrange(people_fully_vaccinated_per_hundred) %>%
+  slice_head(n = 10)
+
+ggplot(
+  bottom10,
+  aes(
+    x = reorder(
+      location,
+      people_fully_vaccinated_per_hundred
+    ),
+    y = people_fully_vaccinated_per_hundred
+  )
+) +
+  geom_col(fill = "#D95F02") +
+  coord_flip() +
+  labs(
+    title = "Bottom 10 Countries by Vaccination Coverage",
+    subtitle = "Latest available observation",
+    x = "Country",
+    y = "Fully vaccinated per 100 inhabitants"
+  ) +
+  theme_minimal()
+```
+
+Figures 2 and 3 demonstrate substantial differences in vaccination coverage across countries. While the most vaccinated countries exceeded 70 fully vaccinated individuals per 100 inhabitants by August 2021, several countries remained below 1%. This contrast highlights the unequal distribution of vaccines and the differing capacities of national healthcare systems during the early stages of the global vaccination campaign.
+
+```{r}
+rollout_speed <- vaccinations_country %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  group_by(location) %>%
+  summarise(
+    first_vaccination_date = min(date),
+    reached_50 = any(people_fully_vaccinated_per_hundred >= 50),
+    date_50 = ifelse(
+      reached_50,
+      min(date[people_fully_vaccinated_per_hundred >= 50]),
+      NA
+    ),
+    date_50 = as.Date(date_50, origin = "1970-01-01"),
+    days_to_50 = as.numeric(date_50 - first_vaccination_date),
+    final_coverage = max(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+rollout_speed %>%
+  count(reached_50)
+```
+Speed of Vaccination Rollout
+
+To evaluate differences in vaccination rollout speed, countries were classified according to whether they reached 50 fully vaccinated individuals per 100 inhabitants during the study period.
+
+The analysis revealed that only 61 out of 216 countries (28.2%) reached the 50% vaccination threshold by August 2021. In contrast, 155 countries (71.8%) failed to reach this level of vaccination coverage during the observed period.
+
+These findings indicate substantial inequalities in vaccine access and rollout capacity. While a relatively small group of countries was able to rapidly vaccinate a large share of its population, the majority of countries remained below the 50% threshold. This suggests that vaccination progress during the first months of the global vaccination campaign was highly uneven and strongly influenced by differences in healthcare infrastructure, vaccine availability, economic resources, and distribution capabilities.
+
+
+```{r}
+top15 <- latest_country %>%
+  arrange(desc(people_fully_vaccinated_per_hundred)) %>%
+  slice_head(n = 15)
+
+bottom15 <- latest_country %>%
+  arrange(people_fully_vaccinated_per_hundred) %>%
+  slice_head(n = 15)
+
+ggplot(
+  top15,
+  aes(
+    x = reorder(location,
+                people_fully_vaccinated_per_hundred),
+    y = people_fully_vaccinated_per_hundred
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Countries with Highest Vaccination Coverage",
+    x = "Country",
+    y = "Fully vaccinated per 100"
+  ) +
+  theme_minimal()
+```
+Figure 4 presents the countries with the highest vaccination coverage by August 2021. Most of the top-ranked locations are small states or territories, including Gibraltar, Pitcairn, and the Cayman Islands. Small populations can facilitate rapid vaccine rollout and may lead to vaccination rates exceeding 100 vaccinated individuals per 100 inhabitants due to population estimation differences and the vaccination of non-residents.
+
+
+```{r}
+fastest_20 <- rollout_speed %>%
+  filter(reached_50 == TRUE) %>%
+  arrange(days_to_50) %>%
+  slice_head(n = 20)
+
+ggplot(
+  fastest_20,
+  aes(
+    x = reorder(location, -days_to_50),
+    y = days_to_50
+  )
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Fastest Countries to Reach 50% Full Vaccination Coverage",
+    subtitle = "Countries with the shortest time to reach the 50% threshold",
+    x = "Country",
+    y = "Days from first vaccination record to 50%"
+  ) +
+  theme_minimal()
+```
+Figure 5 presents the countries that reached 50% full vaccination coverage in the shortest time. The fastest vaccination rollouts were observed primarily in small island territories and highly developed countries with strong healthcare systems. Pitcairn, Bhutan, China, Israel, Qatar and Uruguay were among the countries that achieved the 50% threshold most rapidly.
+
+However, this figure should be interpreted together with the broader results of the study. Only 61 out of 216 countries reached the 50% vaccination threshold during the observed period, while 155 countries did not achieve this level of vaccination coverage by August 2021. Therefore, the graph highlights the performance of the most successful countries rather than the global average situation.
+
+The results suggest that access to vaccines and the ability to distribute them efficiently varied substantially across countries. Rapid vaccination rollout was concentrated in a relatively small group of countries, supporting the hypothesis that significant global health inequalities existed during the early stages of the COVID-19 vaccination campaign.
+
+
+```{r}
+rollout_speed %>%
+  filter(reached_50 == TRUE) %>%
+  ggplot(aes(days_to_50)) +
+  geom_histogram(bins = 15)
+
+rollout_speed %>%
+  filter(reached_50 == TRUE) %>%
+  summarise(
+    min_days = min(days_to_50, na.rm = TRUE),
+    median_days = median(days_to_50, na.rm = TRUE),
+    mean_days = mean(days_to_50, na.rm = TRUE),
+    max_days = max(days_to_50, na.rm = TRUE)
+  )
+```
+Among the 61 countries that reached 50% full vaccination coverage during the study period, the median time required to achieve this milestone was 160 days. The mean rollout time was lower (139 days), indicating that a small number of countries achieved exceptionally rapid vaccination campaigns and reduced the overall average.
+
+Substantial variation was observed even among successful countries. While some countries reached the 50% threshold within only a few weeks, others required up to 235 days. These differences suggest considerable variation in vaccine availability, healthcare infrastructure, logistical capacity, and policy implementation.
+
+Combined with the finding that only 61 of 216 countries reached the 50% vaccination threshold by August 2021, the results provide strong evidence that the global vaccination campaign progressed unevenly across countries. The observed differences support the hypothesis that significant global health inequalities existed during the early phase of COVID-19 vaccine deployment.
+
+
+```{r}
+
+```
+
+```{r}
+latest_country %>%
+  filter(
+    people_fully_vaccinated_per_hundred > 100
+  ) %>%
+  select(
+    location,
+    people_fully_vaccinated_per_hundred
+  )
+```
+One country, Gibraltar, reported a vaccination coverage exceeding 100 fully vaccinated individuals per 100 inhabitants (116.4). This result is likely explained by the small population size of Gibraltar, differences in population estimates, and the vaccination of non-resident individuals. Therefore, this observation was retained in the analysis but interpreted with caution.
+
+
+```{r}
+never_50 <- rollout_speed %>%
+  filter(reached_50 == FALSE) %>%
+  arrange(final_coverage)
+
+never_50 %>%
+  select(location, final_coverage) %>%
+  head(30)
+```
+Countries with the Lowest Vaccination Coverage
+
+The analysis identified a group of countries with extremely low vaccination coverage by August 2021. The Democratic Republic of Congo reported only 0.01 fully vaccinated individuals per 100 inhabitants, followed by Haiti (0.03), South Sudan (0.04), Yemen (0.04), and Chad (0.07).
+
+These values indicate that vaccination campaigns had barely begun in several countries during the study period. In contrast, the most vaccinated countries had already exceeded 70 fully vaccinated individuals per 100 inhabitants, with Gibraltar reaching more than 116.
+
+The difference between the highest and lowest observed vaccination coverage exceeded a factor of 11,000. Such a disparity cannot be explained by random variation alone and strongly suggests unequal access to vaccines, healthcare resources, distribution infrastructure, and international support.
+
+These findings provide direct evidence of substantial global health inequality during the early phase of the COVID-19 vaccination campaign.
+
+
+```{r}
+worst20 <- never_50 %>%
+  slice_head(n = 20)
+
+ggplot(
+  worst20,
+  aes(
+    x = reorder(location, final_coverage),
+    y = final_coverage
+  )
+) +
+  geom_col(fill = "firebrick") +
+  coord_flip() +
+  labs(
+    title = "Lowest observed vaccination coverage by August 2021",
+    subtitle = "Countries that remained furthest from the 50% threshold",
+    x = "Country",
+    y = "Fully vaccinated per 100"
+  ) +
+  theme_minimal()
+```
+```{r}
+
+```
+
+```{r}
+missing_country <- vaccinations_country %>%
+  group_by(location) %>%
+  summarise(
+    missing_pct = mean(is.na(people_fully_vaccinated_per_hundred)) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(missing_pct))
+
+missing_country %>%
+  slice_head(n = 20) %>%
+  ggplot(aes(
+    x = fct_reorder(location, missing_pct),
+    y = missing_pct
+  )) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Countries with Highest Missingness in Full Vaccination Data",
+    x = "Country",
+    y = "Missing values (%)"
+  ) +
+  theme_minimal()
+```
+
+Figure 4 shows that missing vaccination data are not equally distributed across countries. Some countries have a much higher proportion of missing values, which may reflect differences in reporting capacity and health data infrastructure. Therefore, missingness is not only a technical limitation, but may also be connected to global health inequality.
+
+
+```{r}
+final_summary <- latest_country %>%
+  select(
+    location,
+    date,
+    people_fully_vaccinated_per_hundred
+  ) %>%
+  left_join(
+    rollout_speed %>%
+      select(location, reached_50, days_to_50),
+    by = "location"
+  ) %>%
+  left_join(
+    missing_country,
+    by = "location"
+  ) %>%
+  arrange(desc(people_fully_vaccinated_per_hundred))
+
+head(final_summary, 20)
+```
+The results show that COVID-19 vaccination trends differed substantially across countries. High-income and highly resourced countries generally reached higher vaccination coverage earlier, while several countries experienced delayed or slower rollout. The analysis of days required to reach 50% full vaccination coverage further demonstrates that inequality was not only visible in final vaccination levels, but also in the speed at which populations gained access to vaccination. In addition, the uneven distribution of missing values suggests that global inequality may also be reflected in differences in health data reporting infrastructure.¨
+
+
+```{r}
+
+```
+
+```{r}
+correlation_data <- latest_country %>%
+  select(
+    total_vaccinations_per_hundred,
+    people_vaccinated_per_hundred,
+    people_fully_vaccinated_per_hundred,
+    daily_vaccinations_per_million
+  )
+
+cor_matrix <- cor(correlation_data, use = "complete.obs")
+```
+
+```{r}
+library(corrplot)
+
+corrplot(
+  cor_matrix,
+  method = "color",
+  type = "upper",
+  addCoef.col = "black"
+)
+```
+Figure 5 presents the correlation matrix for the main vaccination indicators. Strong positive correlations were observed between total vaccinations per hundred, people vaccinated per hundred, and people fully vaccinated per hundred, with correlation coefficients ranging from 0.94 to 0.98. These results indicate that countries with successful vaccination campaigns generally performed well across multiple vaccination metrics.
+
+In contrast, daily vaccinations per million showed only weak to moderate correlations with cumulative vaccination indicators (0.16–0.40). This suggests that current vaccination activity did not necessarily reflect overall vaccination success. Countries with high vaccination coverage were not always the countries administering vaccines at the highest daily rate during the observed period.
+
+Overall, the correlation analysis indicates that global differences in vaccination outcomes were primarily associated with cumulative vaccination progress rather than short-term vaccination intensity. This finding supports the broader conclusion that substantial inequalities existed in vaccine access and rollout success across countries.
+
+
+```{r}
+pca_data <- latest_country %>%
+  select(
+    total_vaccinations_per_hundred,
+    people_vaccinated_per_hundred,
+    people_fully_vaccinated_per_hundred,
+    daily_vaccinations_per_million
+  ) %>%
+  na.omit()
+
+pca <- prcomp(pca_data, scale. = TRUE)
+```
+
+```{r}
+summary(pca)
+```
+```{r}
+fviz_pca_var(pca,
+             repel = TRUE,
+             col.var = "contrib")
+```
+Principal Component Analysis was applied to the main vaccination indicators to identify the dominant sources of variation across countries. The first principal component explained 80.3% of the total variance, while the second component explained 14.0%. Together, the first two components accounted for 94.3% of the variability in the dataset.
+
+The high proportion of variance explained by the first component suggests that differences between countries were largely driven by a single underlying dimension representing overall vaccination success. Countries with high vaccination coverage, high numbers of vaccinated individuals, and high cumulative vaccination counts tended to cluster together, whereas countries with limited vaccination progress were located at the opposite end of the component space.
+
+These findings indicate that disparities in vaccination outcomes were substantial and can be summarized by a dominant axis separating highly vaccinated countries from countries with low vaccination coverage. The results further support the conclusion that significant global health inequalities existed during the early phase of the COVID-19 vaccination campaign.
+
+```{r}
+kmeans(scale(pca_data), centers = 3)
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```

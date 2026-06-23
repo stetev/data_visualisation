@@ -64,14 +64,12 @@ vaccinations_clean <- vaccinations_clean %>%
       "South America",
       "Upper middle income",
       "High income",
-      "South Africa",
       "European Union",
       "Europe",
       "North America",
       "Oceania",
       "World",
-      "Lower middle income",
-      "United Kingdom"
+      "Lower middle income"
       
     )
   )
@@ -1004,6 +1002,66 @@ table(km$cluster)
 ```
 
 ```{r}
+latest_country <- vaccinations_country %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  arrange(location, date) %>%
+  group_by(location) %>%
+  slice_tail(n = 1) %>%
+  ungroup()
+
+summary(latest_country$people_fully_vaccinated_per_hundred)
+
 
 ```
 
+```{r}
+people_fully_vaccinated_per_hundred
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
