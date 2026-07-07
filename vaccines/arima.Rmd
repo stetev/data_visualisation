@@ -1,10 +1,129 @@
-```{r}
+---
+
+## ARIMA Forecasting: Temporal Inequality in Vaccination Progress
+
+```{r setup, message=FALSE, warning=FALSE}
 library(forecast)
+library(ggplot2)
+library(dplyr)
+library(countrycode)
+
+
+orange_dark   <- "#cc5500"
+orange_mid    <- "#ff6200"
+orange_base   <- "#ff8e00"
+orange_light  <- "#ffb347"
+orange_pale   <- "#ffd280"
+orange_ghost  <- "#ffe8b8"
+
+
+continent_colors <- c(
+  "Africa"   = orange_dark,
+  "Asia"     = orange_mid,
+  "Oceania"  = orange_base,
+  "Americas" = orange_light,
+  "Europe"   = orange_pale
+)
+
+
+income_colors <- c(
+  "High income"         = orange_dark,
+  "Upper middle income" = orange_base,
+  "Lower middle income" = orange_light,
+  "Low income"          = orange_pale
+)
+
+
+theme_orange <- function() {
+  theme_minimal() +
+    theme(
+      plot.title       = element_text(face = "bold", colour = "black"),
+      plot.subtitle    = element_text(colour = "black"),
+      axis.title       = element_text(colour = orange_dark),
+      axis.text        = element_text(colour = "#555555"),
+      legend.title     = element_text(colour = orange_dark, face = "bold"),
+      panel.grid.major = element_line(colour = orange_ghost),
+      panel.grid.minor = element_blank()
+    )
+}
 ```
 
-```{r}
+---
+
+## Vaccination Coverage by Continent
+
+```{r continent_boxplot, warning=FALSE}
+latest_country <- latest_country %>%
+  mutate(
+    continent = countrycode(location,
+                            origin      = "country.name",
+                            destination = "continent")
+  )
+
+latest_country %>%
+  filter(!is.na(continent)) %>%
+  ggplot(aes(
+    x    = reorder(continent,
+                   people_fully_vaccinated_per_hundred,
+                   median),
+    y    = people_fully_vaccinated_per_hundred,
+    fill = continent
+  )) +
+  geom_boxplot(show.legend = FALSE, colour = orange_dark, alpha = 0.85) +
+  scale_fill_manual(values = continent_colors) +
+  labs(
+    title    = "Vaccination Coverage by Continent",
+    subtitle = "Latest available observation per country",
+    x        = "Continent",
+    y        = "Fully vaccinated per 100"
+  ) +
+  theme_orange()
+```
+
+Africa's median vaccination coverage was near zero, while Europe's median exceeded 50 fully vaccinated individuals per 100 inhabitants. This contrast illustrates a pronounced continental dimension of global health inequality during the early phase of the COVID-19 vaccination campaign.
+
+---
+
+## Vaccination Coverage by Income Group Over Time
+
+```{r income_timeseries, warning=FALSE}
+income_groups <- c("High income", "Upper middle income",
+                   "Lower middle income", "Low income")
+
+vaccinations_income <- vaccinations_clean %>%
+  filter(location %in% income_groups) %>%
+  mutate(location = factor(location, levels = income_groups))
+
+vaccinations_income %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  ggplot(aes(
+    x     = date,
+    y     = people_fully_vaccinated_per_hundred,
+    color = location
+  )) +
+  geom_line(linewidth = 1.1) +
+  scale_color_manual(values = income_colors) +
+  scale_x_date(date_labels = "%b %Y") +
+  labs(
+    title    = "COVID-19 Full Vaccination Coverage by Income Group",
+    subtitle = "Aggregated data from Our World in Data",
+    x        = "Date",
+    y        = "Fully vaccinated per 100",
+    color    = "Income Group"
+  ) +
+  theme_orange()
+```
+
+The income group time series reveals a widening gap between high-income and low-income countries throughout 2021. High-income countries accelerated rapidly while low-income countries remained near zero, providing direct evidence of structural global health inequality in vaccine distribution.
+
+---
+
+## Germany: ARIMA Model
+
+```{r germany_ts}
 germany <- vaccinations_country %>%
-  filter(location == "Germany") %>%
+  filter(location == "Germany",
+         !is.na(people_fully_vaccinated_per_hundred)) %>%
   arrange(date)
 
 ts_germany <- ts(
@@ -13,47 +132,227 @@ ts_germany <- ts(
 )
 ```
 
-```{r}
-fit <- auto.arima(ts_germany)
+```{r germany_arima, message=FALSE, warning=FALSE}
+fit <- auto.arima(ts_germany, d = 1, D = 1,
+                  stepwise = FALSE, approximation = FALSE)
 summary(fit)
 ```
-
 ```{r}
-forecast_30 <- forecast(
-  fit,
-  h = 30
-)
-
-plot(forecast_30)
+# Custom forecast plot function — full orange control
+plot_forecast_orange <- function(fc, title_text, y_label) {
+  
+  # Extract components from the forecast object
+  fitted_vals <- as.numeric(fc$x)
+  forecast_vals <- as.numeric(fc$mean)
+  
+  n_fitted  <- length(fitted_vals)
+  n_fore    <- length(forecast_vals)
+  
+  fitted_df <- data.frame(
+    t     = seq_len(n_fitted),
+    value = fitted_vals,
+    type  = "Observed"
+  )
+  
+  fore_df <- data.frame(
+    t      = n_fitted + seq_len(n_fore),
+    mean   = forecast_vals,
+    lo80   = as.numeric(fc$lower[, 1]),
+    hi80   = as.numeric(fc$upper[, 1]),
+    lo95   = as.numeric(fc$lower[, 2]),
+    hi95   = as.numeric(fc$upper[, 2])
+  )
+  
+  ggplot() +
+    # 95% CI band (outermost, palest)
+    geom_ribbon(data = fore_df,
+                aes(x = t, ymin = lo95, ymax = hi95),
+                fill = orange_pale, alpha = 0.6) +
+    # 80% CI band (inner, slightly darker)
+    geom_ribbon(data = fore_df,
+                aes(x = t, ymin = lo80, ymax = hi80),
+                fill = orange_light, alpha = 0.7) +
+    # Historical observed line
+    geom_line(data = fitted_df,
+              aes(x = t, y = value),
+              colour = "#555555", linewidth = 0.7) +
+    # Forecast mean line
+    geom_line(data = fore_df,
+              aes(x = t, y = mean),
+              colour = orange_base, linewidth = 1) +
+    labs(
+      title    = title_text,
+      subtitle = "30-day forecast with 80% and 95% confidence intervals",
+      x        = "Time (weeks)",
+      y        = y_label
+    ) +
+    theme_orange()
+}
 ```
 
-```{r}
+```{r germany_forecast}
+forecast_30 <- forecast(fit, h = 30)
+
+plot_forecast_orange(
+  forecast_30,
+  title_text = "ARIMA Forecast: Germany Full Vaccination Coverage",
+  y_label    = "Fully vaccinated per 100"
+) +
+  scale_fill_manual(values  = c("80%" = orange_light,
+                                "95%" = orange_pale)) +
+  scale_colour_manual(values = c("Point Forecast" = orange_base)) +
+  labs(
+    title    = "ARIMA Forecast: Germany Full Vaccination Coverage",
+    subtitle = "30-day ahead forecast with 80% and 95% confidence intervals",
+    x        = "Time (weeks)",
+    y        = "Fully vaccinated per 100"
+  ) +
+  theme_orange()
+```
+
+---
+
+## Residual Diagnostics
+
+```{r residuals}
+checkresiduals(fit)
+```
+
+The residual diagnostics for the ARIMA(2,1,2)(0,1,1)[7] model indicate a reasonable fit for Germany's vaccination data. The residual time series fluctuates randomly around zero with no systematic trend, suggesting the model captured the main dynamics of the series. A small number of larger residuals around observations 18–22 likely reflect irregular reporting patterns rather than model misspecification. The ACF plot shows no significant autocorrelation at most lags, with minor exceptions near lags 7 and 14, consistent with the weekly reporting structure of the data. The residual distribution approximates normality, supporting the validity of the confidence intervals produced by the forecast.
+
+---
+
+## ETS Model Comparison
+
+```{r ets_forecast}
 fit_ets <- ets(ts_germany)
+fc_ets  <- forecast(fit_ets, h = 30)
 
-fc_ets <- forecast(
-  fit_ets,
-  h = 30
+plot_forecast_orange(
+  fc_ets,
+  title_text = "ETS Forecast: Germany Full Vaccination Coverage",
+  y_label    = "Fully vaccinated per 100"
 )
-
-autoplot(fc_ets)
 ```
 
-```{r}
+---
 
+## ARIMA vs ETS Accuracy (Train/Test Split)
+
+```{r accuracy_comparison, message=FALSE, warning=FALSE}
+n     <- nrow(germany)
+train <- germany$people_fully_vaccinated_per_hundred[1:round(n * 0.8)]
+test  <- germany$people_fully_vaccinated_per_hundred[(round(n * 0.8) + 1):n]
+
+ts_train <- ts(train, frequency = 7)
+
+fit_arima_train <- auto.arima(ts_train, d = 1, D = 1,
+                               stepwise = FALSE, approximation = FALSE)
+fit_ets_train   <- ets(ts_train)
+
+h <- length(test)
+
+acc_arima <- accuracy(forecast(fit_arima_train, h = h), test)
+acc_ets   <- accuracy(forecast(fit_ets_train,   h = h), test)
+
+acc_arima
+acc_ets
 ```
 
-```{r}
+---
 
+## Multi-Country ARIMA Forecast (Inequality Comparison)
+
+```{r multicountry_arima, message=FALSE, warning=FALSE}
+countries_arima <- c("Germany", "India", "Bangladesh")
+
+for (ctry in countries_arima) {
+
+  df <- vaccinations_country %>%
+    filter(location == ctry,
+           !is.na(people_fully_vaccinated_per_hundred)) %>%
+    arrange(date) %>%
+    mutate(
+      daily_change = people_fully_vaccinated_per_hundred -
+                     lag(people_fully_vaccinated_per_hundred)
+    ) %>%
+    filter(!is.na(daily_change))
+
+  if (nrow(df) < 14) {
+    message(paste("Skipping", ctry, "— not enough data"))
+    next
+  }
+
+  ts_ctry <- ts(df$daily_change, frequency = 7)
+
+  fit_ctry <- auto.arima(ts_ctry,
+                          d = 1, D = 1,
+                          stepwise      = FALSE,
+                          approximation = FALSE)
+
+  fc_ctry <- forecast(fit_ctry, h = 30)
+
+
+  print(
+    plot_forecast_orange(
+      fc_ctry,
+      title_text = paste("ARIMA Forecast of Daily Vaccination Change:", ctry),
+      y_label    = "Daily change in fully vaccinated per 100"
+    )
+   +
+      scale_fill_manual(values  = c("80%" = orange_light,
+                                    "95%" = orange_pale)) +
+      scale_colour_manual(values = c("Point Forecast" = orange_base)) +
+      labs(
+        title    = paste("ARIMA Forecast of Daily Vaccination Change:", ctry),
+        subtitle = "30-day forecast with 80% and 95% confidence intervals",
+        x        = "Time (weeks)",
+        y        = "Daily change in fully vaccinated per 100"
+      ) +
+      theme_orange()
+  )
+}
 ```
 
-```{r}
+The ARIMA forecast for Germany shows a declining trend in daily 
+vaccination changes over the 30-day forecast horizon. The confidence 
+intervals are relatively narrow, reflecting the model's high certainty 
+due to Germany's consistent and well-reported vaccination data across 
+244 observations. The predicted daily increments converge toward zero, 
+consistent with a mature vaccination campaign approaching saturation 
+in coverage.
 
-```
+The ARIMA forecast for India shows greater uncertainty than Germany, 
+reflected in wider confidence intervals. The historical series reveals 
+several sharp spikes in daily vaccination changes, likely corresponding 
+to large-scale vaccination drives and reporting irregularities. Despite 
+186 observations, the irregular pattern makes future vaccination 
+increments harder to predict. The forecast suggests daily changes 
+stabilising at a low positive level, indicating a slowing but ongoing 
+vaccination campaign.
 
-```{r}
+The ARIMA forecast for Bangladesh exhibits the widest confidence 
+intervals of the three countries, reflecting the highest level of 
+uncertainty. The historical series shows extended flat periods 
+interrupted by sudden spikes, consistent with batch reporting rather 
+than continuous data collection. With only 93 observations, the model 
+has less data to learn from, resulting in an oscillating forecast with 
+a broad uncertainty range. This instability illustrates a key dimension 
+of global health inequality: lower-income countries not only vaccinated 
+more slowly, but their inconsistent data infrastructure makes reliable 
+forecasting — and therefore effective public health planning — 
+substantially more difficult.
 
-```
 
-```{r}
+Comparing the three ARIMA forecasts reveals a clear pattern aligned 
+with the broader inequality findings of this study. Germany, a 
+high-income country, produced the most reliable forecast with narrow 
+confidence intervals and a smooth historical series. India and 
+Bangladesh, both lower-middle-income countries, showed progressively 
+wider uncertainty bands and more irregular historical patterns. 
+This gradient in forecast reliability mirrors the gradient in 
+vaccination coverage and rollout speed observed earlier, suggesting 
+that global health inequality manifests not only in vaccination outcomes 
+but also in the quality and consistency of health data reporting.
 
-```
+

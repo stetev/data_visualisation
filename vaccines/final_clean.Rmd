@@ -15,10 +15,11 @@ library(scales)
 library(factoextra)
 library(corrplot)
 library(countrycode)
+library(stringr)
+library(ggrepel)
 
 Sys.setlocale("LC_TIME", "C")
 
-# ── Orange colour palette ──────────────────────────────────────────────────
 orange_dark   <- "#cc5500"
 orange_mid    <- "#ff6200"
 orange_base   <- "#ff8e00"
@@ -26,7 +27,6 @@ orange_light  <- "#ffb347"
 orange_pale   <- "#ffd280"
 orange_ghost  <- "#ffe8b8"
 
-# Named palettes for multi-category plots
 country_colors <- c(
   "Germany"       = orange_dark,
   "United States" = orange_mid,
@@ -51,13 +51,6 @@ income_colors <- c(
   "Low income"          = orange_pale
 )
 
-cluster_colors <- c(
-  "1" = orange_dark,
-  "2" = orange_base,
-  "3" = orange_pale
-)
-
-# Shared ggplot2 theme
 theme_orange <- function() {
   theme_minimal() +
     theme(
@@ -73,23 +66,16 @@ theme_orange <- function() {
 }
 ```
 
-
 ```{r load_data}
-library(stringr)
-
 vaccinations <- read.csv("vaccinations.csv", sep = ";")
 
 clean_percent_column <- function(x) {
   x %>%
     str_trim() %>%
-    
-    # roman numerals at beginning
-    str_replace_all("^IV\\.", "4.") %>%
-    str_replace_all("^III\\.", "3.") %>%
-    str_replace_all("^II\\.", "2.") %>%
+    str_replace_all("^IV\\.", "14.") %>%
+    str_replace_all("^III\\.", "111.") %>%
+    str_replace_all("^II\\.", "11.") %>%
     str_replace_all("^I\\.", "1.") %>%
-    
-    # roman numerals at end
     str_replace_all("\\.VII$", ".7") %>%
     str_replace_all("\\.VI$", ".6") %>%
     str_replace_all("\\.V$", ".5") %>%
@@ -97,7 +83,6 @@ clean_percent_column <- function(x) {
     str_replace_all("\\.III$", ".3") %>%
     str_replace_all("\\.II$", ".2") %>%
     str_replace_all("\\.I$", ".1") %>%
-    
     str_replace("^0+", "") %>%
     na_if("") %>%
     as.numeric()
@@ -118,42 +103,7 @@ vaccinations_clean <- vaccinations %>%
     )
   )
 ```
-```{r data_prep}
-regional_aggregates <- c(
-  "World", "Europe", "European Union", "Asia", "Africa",
-  "North America", "South America", "Oceania",
-  "High income", "Upper middle income",
-  "Lower middle income", "Low income"
-)
 
-vaccinations_country <- vaccinations_clean %>%
-  filter(!location %in% regional_aggregates)
-
-latest_country <- vaccinations_country %>%
-  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
-  group_by(location) %>%
-  slice_max(date, n = 1) %>%
-  ungroup()
-
-# ← PASTE HERE
-missing_country <- vaccinations_country %>%
-  group_by(location) %>%
-  summarise(
-    missing_pct = mean(is.na(people_fully_vaccinated_per_hundred)) * 100,
-    .groups = "drop"
-  ) %>%
-  arrange(desc(missing_pct))
-```
-
-```{r missing_data}
-missing_country <- vaccinations_country %>%
-  group_by(location) %>%
-  summarise(
-    missing_pct = mean(is.na(people_fully_vaccinated_per_hundred)) * 100,
-    .groups = "drop"
-  ) %>%
-  arrange(desc(missing_pct))
-```
 ---
 
 ## Data Preparation
@@ -174,6 +124,14 @@ latest_country <- vaccinations_country %>%
   group_by(location) %>%
   slice_max(date, n = 1) %>%
   ungroup()
+
+missing_country <- vaccinations_country %>%
+  group_by(location) %>%
+  summarise(
+    missing_pct = mean(is.na(people_fully_vaccinated_per_hundred)) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(missing_pct))
 ```
 
 The dataset covers `r n_distinct(vaccinations_country$location)` countries and territories, spanning from `r min(vaccinations_country$date)` to `r max(vaccinations_country$date)`. The latest available vaccination observation per country was used for cross-sectional comparisons.
@@ -211,7 +169,6 @@ vaccinations_country %>%
   ) +
   theme_orange()
 ```
-
 
 Figure 1 illustrates substantial differences in vaccination rollout trajectories across countries. The United States achieved rapid vaccination coverage early in 2021, while Germany and Czechia accelerated later and eventually surpassed the United States. In contrast, India and South Africa experienced considerably slower growth throughout the observed period. These patterns suggest unequal access to vaccines and differences in healthcare capacity and vaccination infrastructure.
 
@@ -388,37 +345,25 @@ missing_country %>%
   theme_orange()
 ```
 
-The lollipop chart reveals that several countries show near-complete 
-missingness in vaccination records, with Tokelau, Tuvalu, Madagascar, 
-and others reaching 100% missing values. Importantly, high missingness 
-does not necessarily indicate the absence of a vaccination campaign. 
-Tokelau, for example, achieved over 96% vaccination coverage of its 
-eligible population according to external sources (ReliefWeb, 2021), 
-yet reported no data to the Our World in Data database. This discrepancy 
-illustrates a critical limitation of the dataset: it captures reporting 
-capacity rather than vaccination activity. Countries with limited 
-administrative and digital infrastructure are systematically 
-underrepresented, which means the inequalities observed in this analysis 
-may in fact be underestimated. The absence of data is itself a signal 
-of structural disadvantage.
+The lollipop chart reveals that several countries show near-complete missingness in vaccination records, with Tokelau, Tuvalu, Madagascar, and others reaching 100% missing values. Importantly, high missingness does not necessarily indicate the absence of a vaccination campaign. Tokelau, for example, achieved over 96% vaccination coverage of its eligible population according to external sources (ReliefWeb, 2021), yet reported no data to the Our World in Data database. This discrepancy illustrates a critical limitation of the dataset: it captures reporting capacity rather than vaccination activity. Countries with limited administrative and digital infrastructure are systematically underrepresented, which means the inequalities observed in this analysis may in fact be underestimated. The absence of data is itself a signal of structural disadvantage.
 
 ---
 
 ## Figure 8: Vaccination Coverage by Income Group Over Time
-```{r}
-vaccinations %>%
-  filter(grepl("income", location, ignore.case = TRUE)) %>%
-  distinct(location, iso_code)
-```
 
 ```{r fig8_income_timeseries}
+income_group_levels <- c("High income", "Upper middle income",
+                         "Lower middle income", "Low income")
+
+vaccinations_income <- vaccinations_clean %>%
+  filter(location %in% income_group_levels) %>%
+  mutate(location = factor(location, levels = income_group_levels))
+
 vaccinations_income %>%
   filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
-  ggplot(aes(
-    x = date,
-    y = people_fully_vaccinated_per_hundred,
-    color = income_group
-  )) +
+  ggplot(aes(x     = date,
+             y     = people_fully_vaccinated_per_hundred,
+             color = location)) +
   geom_line(linewidth = 1.1) +
   scale_color_manual(values = income_colors) +
   scale_x_date(date_labels = "%b %Y") +
@@ -484,51 +429,22 @@ cor_matrix <- cor(correlation_data, use = "complete.obs")
 
 corrplot(
   cor_matrix,
-  method   = "color",
-  type     = "upper",
+  method      = "color",
+  type        = "upper",
   addCoef.col = "black",
-  col      = colorRampPalette(c(orange_ghost, "white", orange_dark))(200),
-  tl.col   = "black",
-  tl.srt   = 45
+  col         = colorRampPalette(c(orange_ghost, "white", orange_dark))(200),
+  tl.col      = "black",
+  tl.srt      = 45
 )
 ```
 
-Strong positive correlations (0.94–0.98) were observed between cumulative vaccination indicators. Daily vaccinations per million showed only weak to moderate correlations (0.16–0.40) with cumulative measures, suggesting that current vaccination speed did not necessarily reflect overall success — global differences were primarily driven by cumulative rollout capacity.
+Strong positive correlations (0.94--0.98) were observed between cumulative vaccination indicators. Daily vaccinations per million showed only weak to moderate correlations (0.16--0.40) with cumulative measures, suggesting that current vaccination speed did not necessarily reflect overall success -- global differences were primarily driven by cumulative rollout capacity.
 
 ---
 
 ## Figure 11: PCA of Vaccination Indicators
 
 ```{r fig11_pca}
-pca_data <- latest_country %>%
-  select(
-    total_vaccinations_per_hundred,
-    people_vaccinated_per_hundred,
-    people_fully_vaccinated_per_hundred,
-    daily_vaccinations_per_million
-  ) %>%
-  na.omit()
-
-pca <- prcomp(pca_data, scale. = TRUE)
-summary(pca)
-
-fviz_pca_var(
-  pca,
-  repel         = TRUE,
-  col.var       = "contrib",
-  gradient.cols = c(orange_pale, orange_base, orange_dark)
-)
-```
-
-The first principal component explained 80.3% of total variance, the second 14.0% — together 94.3%. Differences between countries were largely driven by a single dimension representing overall vaccination success, supporting the conclusion that disparities were substantial and systematic rather than random.
-
----
-
-## Figure 12: K-means Clustering in PCA Space
-
-
-```{r fig12_kmeans}
-# Build pca_input keeping location for clustering
 pca_input <- latest_country %>%
   select(location,
          total_vaccinations_per_hundred,
@@ -539,7 +455,25 @@ pca_input <- latest_country %>%
 
 pca_data <- pca_input %>% select(-location)
 pca      <- prcomp(pca_data, scale. = TRUE)
+summary(pca)
 
+fviz_pca_var(
+  pca,
+  repel         = TRUE,
+  col.var       = "contrib",
+  gradient.cols = c(orange_pale, orange_base, orange_dark)
+)
+```
+
+The first principal component explained 76.5% of total variance, the second 22.8% -- together 99.3%. Differences between countries were largely driven by a single dimension representing overall vaccination success, supporting the conclusion that disparities were substantial and systematic rather than random.
+
+---
+
+## Figure 12: K-means Clustering in PCA Space
+
+K-means clustering relies on a random initialisation of cluster centroids, meaning that results may differ across repeated runs of the algorithm. To ensure reproducibility of the analysis, a random seed was set prior to model fitting (set.seed(42)). This guarantees that the cluster assignments reported here can be exactly reproduced by any reader running the same code, which is a standard requirement for transparent and scientifically verifiable data analysis (Peng, 2011).
+
+```{r fig12_kmeans}
 set.seed(42)
 km <- kmeans(scale(pca_data), centers = 3, nstart = 25)
 
@@ -580,255 +514,17 @@ ggplot(pca_scores, aes(PC1, PC2, color = cluster)) +
   scale_color_manual(
     values = cluster_colors_named,
     labels = c(
-      "1 — Upper-middle coverage  (Brazil, Japan, Israel)",
-      "2 — High coverage  (Germany, UK, US)",
-      "3 — Low coverage  (India, DRC, Haiti)"
+      "1 -- Upper-middle coverage  (Brazil, Japan, Israel)",
+      "2 -- High coverage  (Germany, UK, US)",
+      "3 -- Low coverage  (India, DRC, Haiti)"
     )
   ) +
   scale_fill_manual(values = cluster_colors_named) +
   labs(
     title    = "K-means Clusters in PCA Space (k = 3)",
-    subtitle = "Countries grouped by vaccination profile — selected countries labelled",
-    x        = "PC1 (76.5% variance — overall vaccination success)",
-    y        = "PC2 (22.8% variance — daily vaccination intensity)",
-    color    = "Cluster",
-    caption  = "Ellipses show 85% confidence region per cluster"
-  ) +
-  theme_orange() +
-  theme(legend.text = element_text(size = 8.5),
-        legend.key.size = unit(0.9, "lines"),
-        plot.caption = element_text(size = 8, color = "#AAAAAA", hjust = 1))
-
-```
-K-means clustering relies on a random initialisation of cluster centroids, 
-meaning that results may differ across repeated runs of the algorithm. 
-To ensure reproducibility of the analysis, a random seed was set prior 
-to model fitting (set.seed(42)). This guarantees that the cluster 
-assignments reported here can be exactly reproduced by any reader 
-running the same code, which is a standard requirement for transparent 
-and scientifically verifiable data analysis (Peng, 2011).
-
-```{r kmeans_summary}
-pca_data_clustered <- pca_data
-pca_data_clustered$cluster <- factor(km$cluster)
-
-pca_data_clustered %>%
-  group_by(cluster) %>%
-  summarise(across(everything(), mean, na.rm = TRUE))
-```
-
-K-means clustering identified three distinct country groups. Cluster 1 corresponds to countries with high cumulative vaccination coverage, Cluster 2 to countries with moderate progress, and Cluster 3 to countries with minimal vaccination coverage. The clear separation between clusters reinforces the finding that global health inequality in vaccination outcomes was substantial and not continuous.
-
-```{r}
-# Rebuild pca_data with location attached
-pca_input <- latest_country %>%
-  select(location,
-         total_vaccinations_per_hundred,
-         people_vaccinated_per_hundred,
-         people_fully_vaccinated_per_hundred,
-         daily_vaccinations_per_million) %>%
-  na.omit()
-
-pca_data    <- pca_input %>% select(-location)
-pca         <- prcomp(pca_data, scale. = TRUE)
-
-set.seed(42)
-km          <- kmeans(scale(pca_data), centers = 3, nstart = 25)
-
-pca_scores          <- as.data.frame(pca$x)
-pca_scores$cluster  <- factor(km$cluster)
-pca_scores$location <- pca_input$location  # now location is attached
-```
-
-```{r}
-library(ggrepel)
-
-# Remove this line — it overwrites the correct location you just set
-# pca_scores$location <- pca_data_clustered$location  ← DELETE THIS
-
-label_countries <- c("Germany", "United States", "India", "Bangladesh",
-                     "South Africa", "Brazil", "Czechia", "Gibraltar",
-                     "Democratic Republic of Congo", "Haiti", "Ethiopia")
-
-ggplot(pca_scores, aes(PC1, PC2, color = cluster)) +
-  geom_point(alpha = 0.7, size = 2.5) +
-  geom_text_repel(
-    data = pca_scores %>% filter(location %in% label_countries),
-    aes(label = location),
-    size = 3, color = "black", max.overlaps = 20
-  ) +
-  scale_color_manual(values = cluster_colors,
-                     labels = c("1 — High coverage",
-                                "2 — Moderate coverage",
-                                "3 — Low coverage")) +
-  labs(
-    title    = "K-means Clusters in PCA Space (k = 3)",
-    subtitle = "Countries grouped by vaccination profile — selected countries labelled",
-    x        = "PC1 (76.5% variance explained)",
-    y        = "PC2 (22.8% variance explained)",
-    color    = "Cluster"
-  ) +
-  theme_orange()
-```
-```{r}
-pca_data_clustered %>%
-  group_by(cluster) %>%
-  summarise(
-    mean_fully_vaccinated = mean(people_fully_vaccinated_per_hundred, na.rm = TRUE),
-    mean_total            = mean(total_vaccinations_per_hundred, na.rm = TRUE),
-    n_countries           = n()
-  ) %>%
-  mutate(cluster_label = case_when(
-    cluster == 1 ~ "Cluster 1\nHigh coverage",
-    cluster == 2 ~ "Cluster 2\nModerate coverage",
-    cluster == 3 ~ "Cluster 3\nLow coverage"
-  )) %>%
-  ggplot(aes(x = cluster_label,
-             y = mean_fully_vaccinated,
-             fill = cluster)) +
-  geom_col(show.legend = FALSE) +
-  geom_text(aes(label = paste0("n = ", n_countries)),
-            vjust = -0.5, size = 3.5, color = "#555555") +
-  scale_fill_manual(values = cluster_colors) +
-  labs(
-    title    = "Mean Full Vaccination Coverage by K-means Cluster",
-    subtitle = "Average fully vaccinated per 100 inhabitants within each cluster",
-    x        = "Cluster",
-    y        = "Mean fully vaccinated per 100"
-  ) +
-  theme_orange()
-```
-
-```{r}
-# See all countries per cluster
-pca_scores %>%
-  select(location, cluster) %>%
-  arrange(cluster, location) %>%
-  group_by(cluster) %>%
-  summarise(
-    n_countries = n(),
-    countries   = paste(location, collapse = ", ")
-  )
-```
-
-```{r}
-# Cluster 1
-cat("=== CLUSTER 1 ===\n")
-pca_scores %>% filter(cluster == 1) %>% pull(location) %>% sort() %>% cat(sep = ", ")
-
-cat("\n\n=== CLUSTER 2 ===\n")
-pca_scores %>% filter(cluster == 2) %>% pull(location) %>% sort() %>% cat(sep = ", ")
-
-cat("\n\n=== CLUSTER 3 ===\n")
-pca_scores %>% filter(cluster == 3) %>% pull(location) %>% sort() %>% cat(sep = ", ")
-```
-
-```{r}
-library(ggrepel)
-
-# Updated labels based on actual cluster contents
-label_countries <- c(
-  # Cluster 2 — High coverage
-  "Germany", "United States", "United Kingdom", "Gibraltar", "Czechia",
-  # Cluster 1 — Upper-middle coverage  
-  "Brazil", "Israel", "Japan", "Australia", "Turkey",
-  # Cluster 3 — Low coverage
-  "India", "South Africa", "Haiti",
-  "Democratic Republic of Congo", "Afghanistan"
-)
-
-ggplot(pca_scores, aes(PC1, PC2, color = cluster)) +
-  geom_point(alpha = 0.7, size = 2.5) +
-  geom_text_repel(
-    data        = pca_scores %>% filter(location %in% label_countries),
-    aes(label   = location),
-    size        = 2.8,
-    color       = "black",
-    max.overlaps = 25,
-    box.padding  = 0.4,
-    segment.color = "#AAAAAA",
-    segment.size  = 0.3
-  ) +
-  scale_color_manual(
-    values = cluster_colors,
-    labels = c(
-      "1 — Upper-middle coverage\n   (e.g. Brazil, Japan, Israel)",
-      "2 — High coverage\n   (e.g. Germany, UK, US)",
-      "3 — Low coverage\n   (e.g. India, DRC, Haiti)"
-    )
-  ) +
-  labs(
-    title    = "K-means Clusters in PCA Space (k = 3)",
-    subtitle = "Countries grouped by vaccination profile — selected countries labelled",
-    x        = "PC1 (76.5% variance explained)",
-    y        = "PC2 (22.8% variance explained)",
-    color    = "Cluster"
-  ) +
-  theme_orange() +
-  theme(legend.text = element_text(size = 8))
-```
-
-
-```{r}
-library(ggrepel)
-
-# Identify the mystery outlier at the top
-pca_scores %>% arrange(desc(PC2)) %>% select(location, cluster, PC1, PC2) %>% head(3)
-
-label_countries <- c(
-  "Germany", "United States", "United Kingdom", "Gibraltar", "Czechia",
-  "Brazil", "Israel", "Japan", "Australia", "Turkey",
-  "India", "South Africa", "Haiti",
-  "Democratic Republic of Congo", "Afghanistan"
-)
-
-# Better distinct colors — not all orange shades
-cluster_colors_named <- c(
-  "1" = "#E07000",   # burnt orange — upper-middle
-  "2" = "#1F3864",   # navy — high coverage (your report navy)
-  "3" = "#FFB347"    # pale orange — low coverage
-)
-
-ggplot(pca_scores, aes(PC1, PC2, color = cluster)) +
-  # Cluster ellipses to show grouping clearly
-  stat_ellipse(aes(fill = cluster), 
-               geom = "polygon", alpha = 0.08,
-               level = 0.85, show.legend = FALSE) +
-  geom_point(alpha = 0.75, size = 2.8) +
-  geom_text_repel(
-    data         = pca_scores %>% filter(location %in% label_countries),
-    aes(label    = location),
-    size         = 2.8,
-    color        = "black",
-    fontface     = "bold",
-    max.overlaps = 30,
-    box.padding  = 0.5,
-    point.padding = 0.3,
-    segment.color = "#AAAAAA",
-    segment.size  = 0.3,
-    min.segment.length = 0.2
-  ) +
-  scale_color_manual(
-    values = cluster_colors_named,
-    labels = c(
-      "1 — Upper-middle coverage  (Brazil, Japan, Israel)",
-      "2 — High coverage  (Germany, UK, US)",
-      "3 — Low coverage  (India, DRC, Haiti)"
-    )
-  ) +
-  scale_fill_manual(
-    values = cluster_colors_named
-  ) +
-  # Reference lines at origin
-  geom_hline(yintercept = 0, linetype = "dashed", 
-             color = "#CCCCCC", linewidth = 0.4) +
-  geom_vline(xintercept = 0, linetype = "dashed", 
-             color = "#CCCCCC", linewidth = 0.4) +
-  labs(
-    title    = "K-means Clusters in PCA Space (k = 3)",
-    subtitle = "Countries grouped by vaccination profile — selected countries labelled",
-    x        = "PC1 (76.5% variance explained — overall vaccination success)",
-    y        = "PC2 (22.8% variance explained — daily vaccination intensity)",
+    subtitle = "Countries grouped by vaccination profile -- selected countries labelled",
+    x        = "PC1 (76.5% variance -- overall vaccination success)",
+    y        = "PC2 (22.8% variance -- daily vaccination intensity)",
     color    = "Cluster",
     caption  = "Ellipses show 85% confidence region per cluster"
   ) +
@@ -840,7 +536,19 @@ ggplot(pca_scores, aes(PC1, PC2, color = cluster)) +
   )
 ```
 
+```{r kmeans_summary}
+pca_input %>%
+  mutate(cluster = factor(km$cluster)) %>%
+  group_by(cluster) %>%
+  summarise(
+    n_countries           = n(),
+    mean_fully_vaccinated = mean(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+    mean_total            = mean(total_vaccinations_per_hundred, na.rm = TRUE)
+  ) %>%
+  arrange(desc(mean_fully_vaccinated))
+```
 
+K-means clustering identified three distinct country groups. Cluster 2 contains predominantly high-income Western countries (Germany, United Kingdom, United States) with the highest vaccination coverage. Cluster 1 comprises upper-middle income countries (Brazil, Japan, Israel, Australia) with moderate-to-high coverage. Cluster 3 is the largest group and includes predominantly lower-income countries (India, South Africa, Haiti, Democratic Republic of Congo) with low vaccination coverage. The clear separation between clusters confirms that vaccination inequality was structural rather than gradual.
 
 ---
 
@@ -860,4 +568,8 @@ final_summary <- latest_country %>%
 head(final_summary, 20)
 ```
 
-COVID-19 vaccination trends differed substantially across countries. High-income countries reached higher coverage earlier, while lower-income countries experienced delayed rollout. The 50% threshold analysis demonstrates that inequality was visible not only in final coverage levels but also in rollout speed. Missing data patterns further suggest that global inequality extends to health data reporting infrastructure — with consequences for public health planning and resource allocation.
+COVID-19 vaccination trends differed substantially across countries. High-income countries reached higher coverage earlier, while lower-income countries experienced delayed rollout. The 50% threshold analysis demonstrates that inequality was visible not only in final coverage levels but also in rollout speed. Missing data patterns further suggest that global inequality extends to health data reporting infrastructure -- with consequences for public health planning and resource allocation.
+
+```{r cleanup}
+rm(list = ls())
+```

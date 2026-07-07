@@ -7,17 +7,16 @@ library(lubridate)
 
 ```{r}
 clean_percent_column <- function(x) {
-
   x %>%
     str_trim() %>%
     
-    # fix OCR-like patterns
-    str_replace_all("^IV\\.", "14.") %>%
-    str_replace_all("^III\\.", "111.") %>%
-    str_replace_all("^II\\.", "11.") %>%
+    # roman numerals at beginning
+    str_replace_all("^IV\\.", "4.") %>%
+    str_replace_all("^III\\.", "3.") %>%
+    str_replace_all("^II\\.", "2.") %>%
     str_replace_all("^I\\.", "1.") %>%
     
-    # fix suffix cases
+    # roman numerals at end
     str_replace_all("\\.VII$", ".7") %>%
     str_replace_all("\\.VI$", ".6") %>%
     str_replace_all("\\.V$", ".5") %>%
@@ -26,9 +25,7 @@ clean_percent_column <- function(x) {
     str_replace_all("\\.II$", ".2") %>%
     str_replace_all("\\.I$", ".1") %>%
     
-    # remove leading zeros like 04.7 → 4.7
     str_replace("^0+", "") %>%
-    
     na_if("") %>%
     as.numeric()
 }
@@ -44,6 +41,7 @@ vaccinations_clean <- vaccinations %>%
     total_boosters_per_hundred = clean_percent_column(total_boosters_per_hundred)
   )
 ```
+
 ```{r vacc}
 vaccinations_clean <- vaccinations_clean %>%
   filter(

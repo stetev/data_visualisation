@@ -1,0 +1,737 @@
+---
+title: "COVID-19 Vaccination Trends and Global Health Inequality"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(forcats)
+library(tidyr)
+library(scales)
+library(factoextra)
+library(corrplot)
+library(countrycode)
+library(ggrepel)
+library(stringr)
+library(ggdist)
+library(ggbeeswarm)
+library(ggcorrplot)
+
+Sys.setlocale("LC_TIME", "C")
+
+# ── Colour palette ─────────────────────────────────────────────────────────
+orange_dark   <- "#cc5500"
+orange_mid    <- "#ff6200"
+orange_base   <- "#ff8e00"
+orange_light  <- "#ffb347"
+orange_pale   <- "#ffd280"
+orange_ghost  <- "#ffe8b8"
+
+country_colors <- c(
+  "Germany" = orange_dark,
+  "Spain"   = orange_mid,
+  "Czechia" = orange_base,
+  "Brazil"  = orange_light,
+  "India"   = orange_pale
+)
+
+continent_colors <- c(
+  "Africa"   = orange_dark,
+  "Asia"     = orange_mid,
+  "Oceania"  = orange_base,
+  "Americas" = orange_light,
+  "Europe"   = orange_pale
+)
+
+income_colors <- c(
+  "High income"         = orange_dark,
+  "Upper middle income" = orange_base,
+  "Lower middle income" = orange_light,
+  "Low income"          = orange_pale
+)
+
+cluster_colors_named <- c(
+  "1" = "#E07000",
+  "2" = "#1F3864",
+  "3" = "#FFB347"
+)
+
+# ── Shared theme ───────────────────────────────────────────────────────────
+theme_orange <- function() {
+  theme_minimal() +
+    theme(
+      plot.title       = element_text(face = "bold", colour = "black"),
+      plot.subtitle    = element_text(colour = "black"),
+      axis.title       = element_text(colour = orange_dark),
+      axis.text        = element_text(colour = "#555555"),
+      legend.title     = element_text(colour = orange_dark, face = "bold"),
+      legend.text      = element_text(colour = "#555555"),
+      panel.grid.major = element_line(colour = orange_ghost),
+      panel.grid.minor = element_blank()
+    )
+}
+```
+
+---
+
+## Data Loading and Cleaning
+
+```{r load_data}
+vaccinations <- read.csv("vaccinations.csv", sep = ",")
+
+vaccinations_clean <- vaccinations %>%
+  mutate(
+    date = as.Date(date),
+    across(c(total_vaccinations_per_hundred,
+             people_vaccinated_per_hundred,
+             people_fully_vaccinated_per_hundred,
+             total_boosters_per_hundred),
+           ~ suppressWarnings(as.numeric(.x)))
+  )
+```
+
+---
+
+## Data Preparation
+
+```{r data_prep}
+regional_aggregates <- c(
+  "World", "Europe", "European Union", "Asia", "Africa",
+  "North America", "South America", "Oceania",
+  "High income", "Upper middle income",
+  "Lower middle income", "Low income"
+)
+
+vaccinations_country <- vaccinations_clean %>%
+  filter(!location %in% regional_aggregates)
+
+latest_country <- vaccinations_country %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  group_by(location) %>%
+  slice_max(date, n = 1) %>%
+  ungroup()
+
+missing_country <- vaccinations_country %>%
+  group_by(location) %>%
+  summarise(
+    missing_pct = mean(is.na(people_fully_vaccinated_per_hundred)) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(missing_pct))
+
+latest_country <- latest_country %>%
+  mutate(continent = countrycode(location,
+                                 origin      = "country.name",
+                                 destination = "continent"))
+```
+
+The dataset covers `r n_distinct(vaccinations_country$location)` countries and territories, spanning from `r min(vaccinations_country$date)` to `r max(vaccinations_country$date)`. The latest available vaccination observation per country was used for all cross-sectional comparisons.
+
+---
+
+## Figure 1: Vaccination Trends in Selected Countries
+
+```{r fig1_selected_countries}
+selected_countries <- c("Spain", "Germany", "Czechia", "Brazil", "India")
+
+plot_data <- vaccinations_country %>%
+  filter(location %in% selected_countries,
+         !is.na(people_fully_vaccinated_per_hundred))
+
+last_points <- plot_data %>%
+  group_by(location) %>%
+  slice_max(date, n = 1) %>%
+  ungroup()
+
+ggplot(plot_data,
+       aes(x = date,
+           y = people_fully_vaccinated_per_hundred,
+           colour = location)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(data = last_points, size = 3) +
+  geom_text_repel(
+    data          = last_points,
+    aes(label     = location),
+    direction     = "y",
+    hjust         = 0,
+    nudge_x       = 8,
+    size          = 3.8,
+    fontface      = "bold",
+    segment.color = "grey70",
+    show.legend   = FALSE
+  ) +
+  geom_hline(yintercept = 50, linetype = "dashed",
+             colour = "grey40", linewidth = 0.6) +
+  scale_color_manual(values = country_colors) +
+  scale_x_date(date_labels = "%b %Y",
+               expand = expansion(mult = c(0.02, 0.18))) +
+  labs(
+    title    = "COVID-19 Full Vaccination Trends in Selected Countries",
+    subtitle = "Share of people fully vaccinated per 100 inhabitants",
+    x        = "Date",
+    y        = "Fully vaccinated per 100",
+    caption  = "Dashed line = 50% vaccination threshold"
+  ) +
+  theme_orange() +
+  theme(legend.position = "none",
+        plot.caption = element_text(colour = "grey40"))
+```
+
+Figure 1 illustrates substantial differences in vaccination rollout trajectories across the five selected countries. Spain, Germany, and Czechia demonstrate considerably faster rollout trajectories compared to Brazil and India. Spain reached the 50% threshold earliest among the European countries in the comparison, while India remained clearly below the threshold throughout the entire observation period. Brazil showed moderate but gradual progress. These patterns reflect unequal access to vaccines and differences in healthcare infrastructure, logistical capacity, and national vaccination policy.
+
+---
+
+## Figure 2 and 3: Top and Bottom 10 Countries
+
+```{r fig2_top10}
+top10 <- latest_country %>%
+  arrange(desc(people_fully_vaccinated_per_hundred)) %>%
+  slice_head(n = 10)
+
+ggplot(top10,
+       aes(x = reorder(location, people_fully_vaccinated_per_hundred),
+           y = people_fully_vaccinated_per_hundred)) +
+  geom_col(fill = orange_base, width = 0.65,
+           colour = "white", linewidth = 0.3) +
+  geom_text(
+    aes(label = sprintf("%.1f%%", people_fully_vaccinated_per_hundred)),
+    hjust = -0.15, size = 3.5,
+    colour = orange_dark, fontface = "bold"
+  ) +
+  coord_flip() +
+  expand_limits(y = max(top10$people_fully_vaccinated_per_hundred) * 1.1) +
+  labs(
+    title    = "Top 10 Countries by Full Vaccination Coverage",
+    subtitle = "Latest available observation per country",
+    x        = "Country",
+    y        = "Fully vaccinated per 100 inhabitants"
+  ) +
+  theme_orange()
+```
+
+```{r fig3_bottom10}
+bottom10 <- latest_country %>%
+  arrange(people_fully_vaccinated_per_hundred) %>%
+  slice_head(n = 10)
+
+ggplot(bottom10,
+       aes(x = reorder(location, people_fully_vaccinated_per_hundred),
+           y = people_fully_vaccinated_per_hundred)) +
+  geom_col(fill = orange_dark, width = 0.65,
+           colour = "white", linewidth = 0.3) +
+  geom_text(
+    aes(label = sprintf("%.2f", people_fully_vaccinated_per_hundred)),
+    hjust = -0.15, size = 3.5,
+    colour = orange_dark, fontface = "bold"
+  ) +
+  coord_flip() +
+  expand_limits(y = max(bottom10$people_fully_vaccinated_per_hundred) * 1.2) +
+  labs(
+    title    = "Bottom 10 Countries by Full Vaccination Coverage",
+    subtitle = "Latest available observation per country",
+    x        = "Country",
+    y        = "Fully vaccinated per 100 inhabitants"
+  ) +
+  theme_orange()
+```
+
+Figures 2 and 3 demonstrate the extreme range in vaccination outcomes. The most vaccinated countries exceeded 70 fully vaccinated individuals per 100 inhabitants by August 2021, with several small island territories and high-income European states dominating the top rankings. Gibraltar exceeded 100 fully vaccinated per 100 due to cross-border vaccination of non-residents. In contrast, the least vaccinated countries reported fewer than 0.25 fully vaccinated per 100, with the Democratic Republic of Congo recording the lowest value in the entire dataset (0.01 per 100). This contrast of more than 11,000-fold illustrates the severity of global vaccine access inequality.
+
+---
+
+## Speed of Vaccination Rollout
+
+```{r rollout_speed}
+rollout_speed <- vaccinations_country %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  group_by(location) %>%
+  summarise(
+    first_vaccination_date = min(date),
+    reached_50 = any(people_fully_vaccinated_per_hundred >= 50),
+    date_50 = ifelse(
+      reached_50,
+      min(date[people_fully_vaccinated_per_hundred >= 50]),
+      NA
+    ),
+    date_50        = as.Date(date_50, origin = "1970-01-01"),
+    days_to_50     = as.numeric(date_50 - first_vaccination_date),
+    final_coverage = max(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+rollout_speed %>% count(reached_50)
+```
+
+To evaluate differences in vaccination rollout speed, countries were classified according to whether they reached 50 fully vaccinated individuals per 100 inhabitants during the study period. The analysis revealed that only 61 out of 216 countries (28.2%) reached the 50% vaccination threshold by August 2021. In contrast, 155 countries (71.8%) failed to reach this level. These findings indicate substantial inequalities in vaccine access and rollout capacity during the first phase of the global vaccination campaign.
+
+---
+
+## Figure 4: Fastest Countries to Reach 50% Coverage
+
+```{r fig4_fastest}
+fastest10 <- rollout_speed %>%
+  filter(reached_50) %>%
+  arrange(days_to_50) %>%
+  slice_head(n = 10)
+
+ggplot(fastest10,
+       aes(x = reorder(location, days_to_50),
+           y = days_to_50)) +
+  geom_col(fill = orange_base, width = 0.65,
+           colour = "white", linewidth = 0.3) +
+  geom_text(
+    aes(label = days_to_50),
+    hjust = -0.15, size = 3.5,
+    colour = orange_dark, fontface = "bold"
+  ) +
+  coord_flip() +
+  expand_limits(y = max(fastest10$days_to_50) * 1.1) +
+  labs(
+    title    = "Fastest Countries to Reach 50% Full Vaccination Coverage",
+    subtitle = "Time from first vaccination record to the 50% threshold",
+    x        = "Country",
+    y        = "Days"
+  ) +
+  theme_orange()
+```
+
+Figure 4 presents the ten countries that reached 50% full vaccination coverage in the shortest time. The fastest rollouts were observed predominantly in small island territories such as Pitcairn, Nauru, and the Falkland Islands, where small population sizes facilitate rapid campaign completion. Among larger nations, Bhutan, China, and Israel were notable for their rapid deployment. It is important to interpret this figure in the context of the broader finding that only 61 of 216 countries reached this threshold at all.
+
+---
+
+## Figure 5: Distribution of Days to 50%
+
+```{r fig5_days_histogram}
+days_50_data <- rollout_speed %>% filter(reached_50)
+
+median_days <- median(days_50_data$days_to_50, na.rm = TRUE)
+mean_days   <- mean(days_50_data$days_to_50,   na.rm = TRUE)
+
+ggplot(days_50_data, aes(x = days_to_50)) +
+  geom_histogram(bins = 15, fill = orange_light,
+                 colour = "white", alpha = 0.85) +
+  geom_vline(xintercept = median_days, linetype = "dashed",
+             colour = orange_dark, linewidth = 1) +
+  geom_vline(xintercept = mean_days, linetype = "dotted",
+             colour = orange_dark, linewidth = 1) +
+  annotate("label",
+           x = median_days + 5, y = 10,
+           label = paste0("Median = ", round(median_days), " days",
+                          "\nMean = ",   round(mean_days),   " days"),
+           fill = "white", colour = orange_dark,
+           label.size = 0.2, size = 3.3) +
+  geom_rug(sides = "b", colour = orange_dark, alpha = 0.45) +
+  labs(
+    title    = "Distribution of Days to Reach 50% Full Vaccination Coverage",
+    subtitle = "Among the 61 countries that reached the threshold",
+    x        = "Days to reach 50%",
+    y        = "Number of countries"
+  ) +
+  theme_orange()
+```
+
+Among the 61 countries that reached 50% full vaccination coverage, the median time was 160 days from the first recorded vaccination. The mean (139 days) was lower than the median, indicating that a small number of countries with exceptionally rapid campaigns pulled the average downward. Substantial variation was observed, ranging from fewer than 10 days to 235 days. This variability within the already privileged group of countries that reached the threshold further emphasises the uneven nature of global vaccination progress.
+
+---
+
+## Figure 6: Lowest Observed Vaccination Coverage
+
+```{r fig6_worst10}
+lowest10 <- rollout_speed %>%
+  filter(!reached_50) %>%
+  arrange(final_coverage) %>%
+  slice_head(n = 10)
+
+ggplot(lowest10,
+       aes(x = reorder(location, final_coverage),
+           y = final_coverage)) +
+  geom_col(fill = orange_dark, width = 0.65,
+           colour = "white", linewidth = 0.3) +
+  geom_text(
+    aes(label = sprintf("%.2f", final_coverage)),
+    hjust = -0.15, size = 3.5,
+    colour = orange_dark, fontface = "bold"
+  ) +
+  coord_flip() +
+  expand_limits(y = max(lowest10$final_coverage) * 1.2) +
+  labs(
+    title    = "Lowest Observed Full Vaccination Coverage by August 2021",
+    subtitle = "Countries furthest from the 50% threshold",
+    x        = "Country",
+    y        = "Fully vaccinated per 100 inhabitants"
+  ) +
+  theme_orange()
+```
+
+The Democratic Republic of Congo (0.01), Haiti (0.03), and South Sudan (0.04) reported the lowest vaccination coverage in the dataset. All countries shown in Figure 6 reported fewer than 0.5 fully vaccinated individuals per 100 inhabitants by August 2021. The majority are Sub-Saharan African nations facing compounding challenges including limited healthcare infrastructure, constrained public health budgets, and restricted access to international vaccine supply chains. The difference between the highest and lowest observed coverage exceeded a factor of 11,000, providing direct quantitative evidence of profound global health inequality.
+
+---
+
+## Figure 7: Missing Vaccination Data by Country
+
+```{r fig7_missing}
+missing_country %>%
+  filter(missing_pct >= 95) %>%
+  slice_max(missing_pct, n = 15) %>%
+  ggplot(aes(x = fct_reorder(location, missing_pct),
+             y = missing_pct)) +
+  geom_segment(aes(xend = location, y = 95, yend = missing_pct),
+               colour = orange_dark) +
+  geom_point(size = 3, colour = orange_dark) +
+  coord_flip() +
+  scale_y_continuous(limits = c(95, 100),
+                     breaks = seq(95, 100, 5)) +
+  labs(
+    title    = "Countries with Near-Complete Missing Vaccination Data",
+    subtitle = "Countries where 95% or more of records are missing",
+    x        = "Country",
+    y        = "Missing values (%)"
+  ) +
+  theme_orange()
+```
+
+The lollipop chart reveals that a substantial number of countries have near-complete missingness in vaccination records. Notably, high missingness does not necessarily indicate the absence of a vaccination campaign. Tokelau, for example, achieved over 96% vaccination coverage of its eligible population according to external sources (ReliefWeb, 2021), yet reported no data to the Our World in Data database. This discrepancy illustrates a critical limitation of the dataset: it captures reporting capacity rather than vaccination activity. Countries with limited administrative and digital infrastructure are systematically underrepresented, meaning the inequalities observed in this analysis may in fact be underestimated. The absence of data is itself a signal of structural disadvantage.
+
+---
+
+## Figure 8: Vaccination Coverage by Income Group Over Time
+
+```{r fig8_income_timeseries}
+income_group_levels <- c("High income", "Upper middle income",
+                         "Lower middle income", "Low income")
+
+vaccinations_income <- vaccinations_clean %>%
+  filter(location %in% income_group_levels) %>%
+  mutate(location = factor(location, levels = income_group_levels))
+
+last_points_income <- vaccinations_income %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  group_by(location) %>%
+  slice_max(date, n = 1) %>%
+  ungroup()
+
+ggplot(
+  vaccinations_income %>%
+    filter(!is.na(people_fully_vaccinated_per_hundred)),
+  aes(x = date,
+      y = people_fully_vaccinated_per_hundred,
+      colour = location)
+) +
+  geom_line(linewidth = 1.2) +
+  geom_point(data = last_points_income, size = 3) +
+  geom_text_repel(
+    data      = last_points_income,
+    aes(label = paste0(location, " (",
+                       round(people_fully_vaccinated_per_hundred, 1), ")")),
+    direction     = "y",
+    hjust         = 0,
+    nudge_x       = 8,
+    size          = 3.6,
+    fontface      = "bold",
+    segment.color = "grey70",
+    show.legend   = FALSE
+  ) +
+  scale_color_manual(values = income_colors) +
+  scale_x_date(date_labels = "%b %Y",
+               expand = expansion(mult = c(0.02, 0.48))) +
+  labs(
+    title    = "COVID-19 Full Vaccination Coverage by Income Group",
+    subtitle = "Aggregated data from Our World in Data",
+    x        = "Date",
+    y        = "Fully vaccinated per 100"
+  ) +
+  theme_orange() +
+  theme(legend.position = "none")
+```
+
+The income group time series reveals a widening gap in vaccination coverage throughout 2021. High-income countries accelerated rapidly from January 2021 onwards, reaching approximately 50 fully vaccinated per 100 inhabitants by September 2021. Upper-middle income countries followed with a significant delay, while lower-middle income and low-income countries remained near zero throughout the entire observation period. The divergence accelerated from April 2021 onwards, coinciding with large-scale rollout programmes in Europe and North America. This pattern provides direct evidence that vaccine distribution during the initial phase of the global campaign was strongly stratified by national income level.
+
+---
+
+## Figure 9: Vaccination Coverage by Continent
+
+```{r fig9_continent_raincloud, warning=FALSE}
+latest_country %>%
+  filter(!is.na(continent),
+         !is.na(people_fully_vaccinated_per_hundred),
+         people_fully_vaccinated_per_hundred <= 100) %>%
+  mutate(continent = reorder(continent,
+                             people_fully_vaccinated_per_hundred,
+                             median)) %>%
+  ggplot(aes(x     = continent,
+             y     = people_fully_vaccinated_per_hundred,
+             fill  = continent,
+             color = continent)) +
+  ggdist::stat_halfeye(
+    adjust        = 0.7,
+    width         = 0.8,
+    justification = -0.18,
+    .width        = 0,
+    point_colour  = NA,
+    alpha         = 0.65
+  ) +
+  geom_boxplot(
+    width         = 0.16,
+    outlier.shape = NA,
+    alpha         = 0.45,
+    colour        = orange_dark
+  ) +
+  ggbeeswarm::geom_quasirandom(
+    width       = 0.08,
+    size        = 1.5,
+    alpha       = 0.45,
+    show.legend = FALSE
+  ) +
+  scale_fill_manual(values  = continent_colors) +
+  scale_color_manual(values = continent_colors) +
+  scale_y_continuous(limits = c(0, 100),
+                     breaks = seq(0, 100, 20)) +
+  labs(
+    title    = "Vaccination Coverage by Continent",
+    subtitle = "Distribution of latest observed coverage per country",
+    x        = "Continent",
+    y        = "Fully vaccinated per 100"
+  ) +
+  theme_orange() +
+  theme(legend.position  = "none",
+        axis.text.x      = element_text(angle = 20, hjust = 1))
+```
+
+The raincloud plot combines a smoothed density estimate, boxplot, and individual country data points to show the full distribution of vaccination coverage by continent. Africa shows the lowest median coverage with a highly right-skewed distribution, indicating that even the best-performing African countries remained at relatively low coverage levels. Europe shows the highest median and a comparatively narrow distribution, reflecting more uniform progress across countries. Asia and the Americas show wide within-continent variation, suggesting that continental groupings mask important heterogeneity driven by income and infrastructure differences.
+
+---
+
+## Figure 10: Correlation Matrix
+
+```{r fig10_correlation}
+correlation_data <- latest_country %>%
+  select(total_vaccinations_per_hundred,
+         people_vaccinated_per_hundred,
+         people_fully_vaccinated_per_hundred,
+         daily_vaccinations_per_million)
+
+cor_matrix <- cor(correlation_data, use = "complete.obs")
+
+ggcorrplot(
+  cor_matrix,
+  method     = "square",
+  type       = "lower",
+  lab        = TRUE,
+  lab_size   = 4,
+  colors     = c(orange_ghost, "white", orange_dark),
+  outline.col = "white",
+  title      = "Correlation Matrix of Vaccination Indicators"
+) +
+  theme_orange() +
+  theme(legend.position = "right",
+        plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+Strong positive correlations (r = 0.94–0.98) were observed between the three cumulative vaccination indicators: total vaccinations per hundred, people vaccinated per hundred, and people fully vaccinated per hundred. This confirms that countries performing well on one cumulative metric tend to perform well across all of them. In contrast, daily vaccinations per million showed only weak to moderate correlations with cumulative measures (r = 0.16–0.40), indicating that current vaccination activity at the time of the latest observation was largely decoupled from overall campaign success. Countries that had already completed their campaigns were no longer administering high daily volumes, while countries still in early rollout showed high daily rates relative to their cumulative progress.
+
+---
+
+## Figure 11: PCA of Vaccination Indicators
+
+```{r pca_build, warning=FALSE}
+pca_input <- latest_country %>%
+  select(location,
+         total_vaccinations_per_hundred,
+         people_vaccinated_per_hundred,
+         people_fully_vaccinated_per_hundred,
+         daily_vaccinations_per_million) %>%
+  na.omit()
+
+pca_data <- pca_input %>% select(-location)
+pca      <- prcomp(pca_data, scale. = TRUE)
+summary(pca)
+
+pca_scores           <- as.data.frame(pca$x)
+pca_scores$location  <- pca_input$location
+pca_scores$continent <- countrycode(pca_input$location,
+                                    origin      = "country.name",
+                                    destination = "continent")
+
+loadings <- as.data.frame(pca$rotation) %>%
+  tibble::rownames_to_column("variable") %>%
+  mutate(variable = recode(variable,
+    "people_fully_vaccinated_per_hundred" = "Fully vaccinated",
+    "total_vaccinations_per_hundred"      = "Total doses",
+    "people_vaccinated_per_hundred"       = "At least one dose",
+    "daily_vaccinations_per_million"      = "Daily doses / million"
+  ))
+```
+
+```{r fig11a_pca_continent, warning=FALSE}
+label_countries <- c("Spain", "Germany", "Czechia", "Brazil", "India")
+
+ggplot(pca_scores %>% filter(!is.na(continent)),
+       aes(PC1, PC2)) +
+  geom_point(aes(colour = continent), size = 2.5, alpha = 0.75) +
+  geom_point(
+    data   = subset(pca_scores, location %in% label_countries),
+    shape  = 21, fill = "white", colour = "black",
+    stroke = 0.8, size = 3.8
+  ) +
+  geom_text_repel(
+    data         = subset(pca_scores, location %in% label_countries),
+    aes(label    = location),
+    size         = 3.6, fontface = "bold",
+    box.padding  = 0.5, point.padding = 0.3
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey70") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey70") +
+  scale_colour_manual(values = continent_colors) +
+  labs(
+    title    = "PCA of Countries by Vaccination Profile",
+    subtitle = "Countries coloured by continent — selected countries labelled",
+    x        = "PC1 (overall vaccination coverage)",
+    y        = "PC2 (daily vaccination intensity)",
+    colour   = "Continent"
+  ) +
+  theme_orange() +
+  theme(legend.position = "bottom")
+```
+
+```{r fig11b_pca_loadings}
+loadings_plot <- loadings %>%
+  mutate(
+    PC1_plot = case_when(
+      variable == "Fully vaccinated"     ~ PC1 * 1.65,
+      variable == "Total doses"          ~ PC1 * 1.55,
+      variable == "At least one dose"    ~ PC1 * 1.45,
+      variable == "Daily doses / million" ~ PC1 * 1.25,
+      TRUE ~ PC1
+    ),
+    PC2_plot = case_when(
+      variable == "Fully vaccinated"     ~ PC2 + 0.75,
+      variable == "Total doses"          ~ PC2 + 1.25,
+      variable == "At least one dose"    ~ PC2 - 0.55,
+      variable == "Daily doses / million" ~ PC2 - 0.85,
+      TRUE ~ PC2
+    )
+  )
+
+ggplot() +
+  geom_point(
+    data = pca_scores,
+    aes(PC1, PC2),
+    colour = "grey80",
+    alpha = 0.25,
+    size = 2
+  ) +
+  geom_segment(
+    data = loadings_plot,
+    aes(x = 0, y = 0, xend = PC1_plot, yend = PC2_plot),
+    arrow = arrow(length = unit(0.3, "cm")),
+    colour = orange_dark,
+    linewidth = 0.6
+  ) +
+  geom_text_repel(
+    data = loadings_plot,
+    aes(PC1_plot, PC2_plot, label = variable),
+    colour = orange_dark,
+    fontface = "bold",
+    size = 4,
+    force = 15,
+    max.overlaps = Inf,
+    box.padding = 0.9,
+    point.padding = 0.5
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey70") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey70") +
+  labs(
+    title = "PCA Variable Loadings",
+    subtitle = "Arrows are slightly separated for readability",
+    x = "PC1",
+    y = "PC2"
+  ) +
+  theme_orange()
+```
+
+Principal Component Analysis was applied to four vaccination indicators after standardisation. The first principal component explained `r round(summary(pca)$importance[2,1]*100, 1)`% of total variance, the second `r round(summary(pca)$importance[2,2]*100, 1)`% — together accounting for `r round(summary(pca)$importance[3,2]*100, 1)`% of all variability.
+
+The continent scatter plot shows that countries separate clearly along PC1, with African and lower-income Asian countries clustering on the left (low coverage) and European countries on the right (high coverage). The variable loadings plot confirms the structure: three cumulative indicators load strongly and in the same direction along PC1, while daily vaccinations per million loads primarily on PC2 and is nearly orthogonal to the cumulative indicators. This confirms that PC1 represents a single dominant axis of overall vaccination inequality, while PC2 captures variation in current vaccination intensity independent of cumulative progress.
+
+---
+
+## Figure 12: K-means Clustering in PCA Space
+
+K-means clustering relies on a random initialisation of cluster centroids, meaning that results may differ across repeated runs of the algorithm. To ensure reproducibility of the analysis, a random seed was set prior to model fitting (set.seed(42)), following the minimum standard of reproducibility described by Peng (2011), which requires that data and code produce identical results when re-executed.
+
+```{r fig12_kmeans}
+set.seed(42)
+km <- kmeans(scale(pca_data), centers = 3, nstart = 25)
+
+pca_scores$cluster <- factor(km$cluster)
+
+ggplot(pca_scores, aes(PC1, PC2, color = cluster)) +
+  stat_ellipse(aes(fill = cluster),
+               geom = "polygon", alpha = 0.08,
+               level = 0.85, show.legend = FALSE) +
+  geom_point(alpha = 0.75, size = 2.8) +
+  geom_text_repel(
+    data          = pca_scores %>% filter(location %in% label_countries),
+    aes(label     = location),
+    size          = 2.8, color = "black", fontface = "bold",
+    max.overlaps  = 30, box.padding = 0.5, point.padding = 0.3,
+    segment.color = "#AAAAAA", segment.size = 0.3,
+    min.segment.length = 0.2
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed",
+             color = "#CCCCCC", linewidth = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             color = "#CCCCCC", linewidth = 0.4) +
+  scale_fill_manual(values = cluster_colors_named) +
+  labs(
+    title    = "K-means Clusters in PCA Space (k = 3)",
+    subtitle = "Countries grouped by vaccination profile — selected countries labelled",
+    x        = paste0("PC1 (", round(summary(pca)$importance[2,1]*100,1), "% variance — overall vaccination success)"),
+    y        = paste0("PC2 (", round(summary(pca)$importance[2,2]*100,1), "% variance — daily vaccination intensity)"),
+    color    = "Cluster",
+    caption  = "Ellipses show 85% confidence region per cluster"
+  ) +
+  theme_orange() +
+  theme(
+    plot.caption    = element_text(size = 8, color = "#AAAAAA", hjust = 1)
+  )
+```
+
+```{r kmeans_summary}
+pca_input %>%
+  mutate(cluster = factor(km$cluster)) %>%
+  group_by(cluster) %>%
+  summarise(
+    n_countries           = n(),
+    mean_fully_vaccinated = mean(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+    mean_total            = mean(total_vaccinations_per_hundred,       na.rm = TRUE)
+  ) %>%
+  arrange(desc(mean_fully_vaccinated))
+```
+
+K-means clustering identified three structurally distinct country groups. Cluster 2 contains predominantly high-income countries — including Spain, Germany, and Czechia — with the highest vaccination coverage. Cluster 1 comprises upper-middle income countries such as Brazil with moderate-to-high coverage. Cluster 3 is the largest group and includes predominantly lower-income countries such as India, with low vaccination coverage. The clear geometric separation between clusters in PCA space confirms that vaccination inequality during the study period was structural and categorical rather than gradual, supporting the central hypothesis of this analysis.
+
+---
+
+## Summary
+
+```{r final_summary}
+final_summary <- latest_country %>%
+  select(location, date, people_fully_vaccinated_per_hundred) %>%
+  left_join(
+    rollout_speed %>% select(location, reached_50, days_to_50),
+    by = "location"
+  ) %>%
+  left_join(missing_country, by = "location") %>%
+  arrange(desc(people_fully_vaccinated_per_hundred))
+
+head(final_summary, 20)
+```
+
+COVID-19 vaccination trends differed substantially across countries during January to September 2021. High-income countries reached higher coverage earlier and with greater consistency, while lower-income countries experienced delayed, slower, and more irregular rollout. The 50% threshold analysis demonstrates that inequality was visible not only in final coverage levels but also in rollout speed: only 28.2% of countries reached the threshold at all, and among those that did, the time required varied from days to nearly eight months. Missing data patterns further suggest that global inequality extends beyond vaccination outcomes to health data reporting infrastructure itself — with direct consequences for evidence-based public health planning and international resource allocation.
+
+
