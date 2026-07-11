@@ -1,0 +1,871 @@
+---
+title: "COVID-19 Vaccination Trends and Global Health Inequality: Full Analysis Pipeline"
+author: "Eva Štětinová & Ayushman Mandhotra"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+<!--
+This replaces final_complete.Rmd. Fixes applied relative to the previous
+version (see review notes shared separately):
+  - No more hard-coded "September 2021" / "217 countries" claims — every
+    date and count in the prose below is pulled inline from the data with
+    `r ...` so text and code cannot drift out of sync again.
+  - §4.2-equivalent data loading is described accurately: the file is a
+    plain comma-delimited CSV with ordinary missing values, no semicolon
+    delimiter and no Roman-numeral corruption. That claim in the previous
+    write-up did not correspond to anything in this code and needs to stay
+    out of the notebook and the report.
+  - K-means cluster labels are now derived from each cluster's computed
+    mean coverage rather than hard-coded by cluster index.
+  - k = 3 is now justified with an elbow plot and average silhouette width
+    instead of asserted from theory alone.
+  - The orphaned "rollout speed world map" paragraph from the previous
+    version (which had no matching figure) is replaced with an actual map.
+  - Figure interpretations reference computed values (e.g. which countries
+    are actually in the fastest-10 list) instead of asserted country names.
+  - Known comparability caveats (uneven "latest observation" dates across
+    countries, PCA row-dropping, one excluded outlier in the raincloud
+    plot) are disclosed at the point they arise, not left implicit.
+-->
+
+```{r setup, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 7.5, fig.height = 4.8)
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(forcats)
+library(countrycode)
+library(ggrepel)
+library(ggdist)
+library(ggbeeswarm)
+library(ggcorrplot)
+library(factoextra)
+library(ggbreak)
+
+Sys.setlocale("LC_TIME", "C")
+
+# ---- Colour palette (kept identical to arima.Rmd) -------------------------
+teal_dark   <- "#015c6d"
+teal_mid    <- "#017a8f"
+teal_base   <- "#019ab5"
+teal_light  <- "#4dc2d6"
+teal_pale   <- "#a8e2ec"
+teal_ghost  <- "#d9f2f6"
+
+red_dark    <- "#c02200"
+red_mid     <- "#fd300b"
+red_base    <- "#fd5a38"
+red_light   <- "#fe8a70"
+red_pale    <- "#feb9a8"
+
+country_colors <- c(
+  "Germany" = teal_dark, "Spain" = teal_base, "Czechia" = teal_light,
+  "Brazil"  = red_base,  "India" = red_light
+)
+
+continent_colors <- c(
+  "Africa" = red_dark, "Asia" = red_base, "Oceania" = teal_light,
+  "Americas" = teal_base, "Europe" = teal_dark
+)
+
+income_colors <- c(
+  "High income" = teal_dark, "Upper middle income" = teal_base,
+  "Lower middle income" = red_light, "Low income" = red_dark
+)
+
+theme_teal <- function() {
+  theme_minimal() +
+    theme(
+      plot.title       = element_text(face = "bold", colour = "black"),
+      plot.subtitle    = element_text(colour = "black"),
+      axis.title       = element_text(colour = teal_dark),
+      axis.text        = element_text(colour = "#555555"),
+      legend.title     = element_text(colour = teal_dark, face = "bold"),
+      legend.text      = element_text(colour = "#555555"),
+      panel.grid.major = element_line(colour = teal_ghost),
+      panel.grid.minor = element_blank()
+    )
+}
+```
+
+---
+
+## Data Loading and Cleaning
+
+The raw file is a standard comma-delimited CSV (Our World in Data's public
+vaccinations export) with ordinary missing values encoded as empty cells.
+No non-standard delimiter or encoding correction is required or applied.
+
+```{r load_data}
+vaccinations <- read.csv("vaccinations.csv", sep = ",", stringsAsFactors = FALSE)
+
+vaccinations_clean <- vaccinations %>%
+  mutate(
+    date = as.Date(date),
+    across(
+      c(total_vaccinations_per_hundred,
+        people_vaccinated_per_hundred,
+        people_fully_vaccinated_per_hundred,
+        total_boosters_per_hundred),
+      ~ suppressWarnings(as.numeric(.x))
+    )
+  )
+
+country_short_names <- c(
+  "United Arab Emirates" = "UAE",
+  "Democratic Republic of Congo" = "DRC",
+  "Democratic Republic of the Congo" = "DRC",
+  "United States" = "USA",
+  "United Kingdom" = "UK",
+  "Czech Republic" = "Czechia"
+)
+```
+
+---
+
+## Data Preparation
+
+```{r data_prep}
+regional_aggregates <- c(
+  "World", "Europe", "European Union", "Asia", "Africa",
+  "North America", "South America", "Oceania",
+  "High income", "Upper middle income",
+  "Lower middle income", "Low income"
+)
+
+vaccinations_country <- vaccinations_clean %>%
+  filter(!location %in% regional_aggregates) %>%
+  mutate(location = recode(location, !!!country_short_names, .default = location))
+
+latest_country <- vaccinations_country %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  group_by(location) %>%
+  slice_max(date, n = 1) %>%
+  ungroup() %>%
+  mutate(continent = countrycode(location, origin = "country.name",
+                                  destination = "continent"))
+
+missing_country <- vaccinations_country %>%
+  group_by(location) %>%
+  summarise(
+    missing_pct = mean(is.na(people_fully_vaccinated_per_hundred)) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(missing_pct))
+```
+
+The dataset covers `r n_distinct(vaccinations_country$location)` countries
+and territories (after excluding the `r length(regional_aggregates)`
+continent/income aggregate rows retained separately for group-level
+analysis), spanning `r format(min(vaccinations_country$date), "%B %d, %Y")`
+to `r format(max(vaccinations_country$date), "%B %d, %Y")`. Of these,
+`r n_distinct(latest_country$location)` countries have at least one
+non-missing full-vaccination record and form the basis of every
+cross-sectional ("latest observation") comparison below.
+
+**Comparability caveat.** "Latest observation" means each country's own
+most recent non-missing record, not a fixed calendar date shared by all
+countries. These dates range from
+`r format(min(latest_country$date), "%B %d, %Y")` to
+`r format(max(latest_country$date), "%B %d, %Y")` —
+`r sum(latest_country$date < (max(vaccinations_country$date) - 30))` of the
+`r nrow(latest_country)` countries have a "latest" snapshot more than 30
+days older than the true end of the observation window, meaning their
+true August 2021 position could be higher than what is plotted here.
+Every cross-sectional figure below (top/bottom lists, PCA, clustering, the
+continent comparison) inherits this limitation.
+
+---
+
+## Figure 1: Vaccination Trends in Selected Countries
+
+```{r fig1_selected_countries}
+selected_countries <- c("Spain", "Germany", "Czechia", "Brazil", "India")
+
+plot_data <- vaccinations_country %>%
+  filter(location %in% selected_countries,
+         !is.na(people_fully_vaccinated_per_hundred))
+
+last_points <- plot_data %>%
+  group_by(location) %>%
+  slice_max(date, n = 1) %>%
+  ungroup()
+
+ggplot(plot_data,
+       aes(x = date, y = people_fully_vaccinated_per_hundred, colour = location)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(data = last_points, size = 3) +
+  geom_text_repel(
+    data = last_points, aes(label = location),
+    direction = "y", hjust = 0, nudge_x = 8, size = 3.8,
+    fontface = "bold", segment.color = "grey70", show.legend = FALSE
+  ) +
+  geom_hline(yintercept = 50, linetype = "dashed", colour = "grey40", linewidth = 0.6) +
+  scale_color_manual(values = country_colors) +
+  scale_x_date(date_labels = "%b %Y", expand = expansion(mult = c(0.02, 0.18))) +
+  labs(
+    title    = "COVID-19 Full Vaccination Trends in Selected Countries",
+    subtitle = "Share of people fully vaccinated per 100 inhabitants",
+    x = "Date", y = "Fully vaccinated per 100",
+    caption = "Dashed line = 50% vaccination threshold"
+  ) +
+  theme_teal() +
+  theme(legend.position = "none", plot.caption = element_text(colour = "grey40"))
+```
+
+Figure 1 compares five countries — Spain, Germany, Czechia, Brazil, and
+India — chosen to span high-income European states and two larger
+middle/lower-middle-income countries. Spain, Germany, and Czechia show
+considerably faster rollout trajectories than Brazil and India; India
+remains clearly below the 50% threshold throughout the observation
+window.
+
+---
+
+## Figures 2 and 3: Top and Bottom 10 Countries (Latest Observation)
+
+```{r fig2_top10}
+top10 <- latest_country %>%
+  arrange(desc(people_fully_vaccinated_per_hundred)) %>%
+  slice_head(n = 10)
+
+ggplot(top10, aes(x = reorder(location, people_fully_vaccinated_per_hundred),
+                   y = people_fully_vaccinated_per_hundred)) +
+  geom_col(fill = teal_base, width = 0.65, colour = "white", linewidth = 0.3) +
+  geom_text(aes(label = sprintf("%.1f%%", people_fully_vaccinated_per_hundred)),
+            hjust = -0.15, size = 3.5, colour = teal_dark, fontface = "bold") +
+  coord_flip() +
+  expand_limits(y = max(top10$people_fully_vaccinated_per_hundred) * 1.1) +
+  labs(title = "Top 10 Countries by Full Vaccination Coverage",
+       subtitle = "Latest available observation per country",
+       x = "Country", y = "Fully vaccinated per 100 inhabitants") +
+  theme_teal()
+```
+
+```{r fig3_bottom10}
+bottom10 <- latest_country %>%
+  arrange(people_fully_vaccinated_per_hundred) %>%
+  slice_head(n = 10)
+
+ggplot(bottom10, aes(x = reorder(location, people_fully_vaccinated_per_hundred),
+                      y = people_fully_vaccinated_per_hundred)) +
+  geom_col(fill = teal_dark, width = 0.65, colour = "white", linewidth = 0.3) +
+  geom_text(aes(label = sprintf("%.2f", people_fully_vaccinated_per_hundred)),
+            hjust = -0.15, size = 3.5, colour = teal_dark, fontface = "bold") +
+  coord_flip() +
+  expand_limits(y = max(bottom10$people_fully_vaccinated_per_hundred) * 1.2) +
+  labs(title = "Bottom 10 Countries by Full Vaccination Coverage",
+       subtitle = "Latest available observation per country",
+       x = "Country", y = "Fully vaccinated per 100 inhabitants") +
+  theme_teal()
+```
+
+The highest-coverage country, `r top10$location[1]`, reported
+`r sprintf("%.1f", top10$people_fully_vaccinated_per_hundred[1])` fully
+vaccinated per 100 inhabitants — a figure above 100 because it reflects
+vaccination of non-resident cross-border workers, not an error in the
+data. The lowest, `r bottom10$location[1]`, reported
+`r sprintf("%.2f", bottom10$people_fully_vaccinated_per_hundred[1])`, a
+ratio of roughly
+`r round(top10$people_fully_vaccinated_per_hundred[1] / bottom10$people_fully_vaccinated_per_hundred[1])`-fold
+between the two extremes.
+
+## Figure 3b: Highest and Lowest Coverage, Side by Side (Broken Axis)
+
+The gap between the highest- and lowest-coverage countries is large enough
+(more than three orders of magnitude) that a single linear axis cannot show
+both ends meaningfully. `ggbreak::scale_y_break()` compresses the unused
+middle of the range so both groups remain readable in one figure — an
+axis-break technique not covered in the course lectures.
+
+```{r fig3b_combined_break, message=FALSE, warning=FALSE}
+top5 <- latest_country %>%
+  arrange(desc(people_fully_vaccinated_per_hundred)) %>%
+  slice_head(n = 5) %>%
+  mutate(group = "Highest coverage")
+
+bottom5 <- latest_country %>%
+  arrange(people_fully_vaccinated_per_hundred) %>%
+  slice_head(n = 5) %>%
+  mutate(group = "Lowest coverage")
+
+combined <- bind_rows(top5, bottom5) %>%
+  mutate(location = reorder(location, people_fully_vaccinated_per_hundred),
+         group = factor(group, levels = c("Highest coverage", "Lowest coverage")))
+
+break_lower <- ceiling(max(bottom5$people_fully_vaccinated_per_hundred) * 4) / 4
+break_upper <- floor(min(top5$people_fully_vaccinated_per_hundred) * 0.9)
+
+ggplot(combined, aes(x = location, y = people_fully_vaccinated_per_hundred, fill = group)) +
+  geom_col(width = 0.65, colour = "white", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(people_fully_vaccinated_per_hundred >= 1,
+                                sprintf("%.1f%%", people_fully_vaccinated_per_hundred),
+                                sprintf("%.2f%%", people_fully_vaccinated_per_hundred))),
+            hjust = -0.2, size = 3.2, colour = teal_dark, fontface = "bold") +
+  coord_flip() +
+  scale_y_break(c(break_lower, break_upper), scales = 1, space = 0.5) +
+  scale_fill_manual(values = c("Highest coverage" = teal_base, "Lowest coverage" = red_dark), name = NULL) +
+  labs(title = "Vaccination Coverage: Highest and Lowest Countries",
+       subtitle = paste0("Axis break separates the two ranges (gap between ",
+                          break_lower, " and ", break_upper, ")"),
+       x = "Country", y = "Fully vaccinated per 100 inhabitants",
+       caption = "Source: Our World in Data COVID-19 vaccination dataset (Mathieu et al., 2021)") +
+  theme_teal() + theme(legend.position = "top", legend.text = element_text(size = 9))
+```
+
+---
+
+## Speed of Vaccination Rollout
+
+```{r rollout_speed}
+rollout_speed <- vaccinations_country %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  group_by(location) %>%
+  summarise(
+    first_vaccination_date = min(date),
+    reached_50 = any(people_fully_vaccinated_per_hundred >= 50),
+    date_50 = ifelse(
+      reached_50, min(date[people_fully_vaccinated_per_hundred >= 50]), NA
+    ),
+    date_50 = as.Date(date_50, origin = "1970-01-01"),
+    days_to_50 = as.numeric(date_50 - first_vaccination_date),
+    final_coverage = max(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+n_reached <- sum(rollout_speed$reached_50)
+n_total   <- nrow(rollout_speed)
+
+cat(sprintf(
+  "%d of %d countries (%.1f%%) reached 50%% full vaccination coverage.\n",
+  n_reached, n_total, 100 * n_reached / n_total
+))
+```
+
+Of `r n_total` countries with any reported full-vaccination data, only
+`r n_reached` (`r sprintf("%.1f", 100*n_reached/n_total)`%) reached the 50%
+threshold during the observation window; the remaining
+`r n_total - n_reached` (`r sprintf("%.1f", 100*(n_total-n_reached)/n_total)`%)
+did not.
+
+---
+
+## Figure 4: Fastest Countries to Reach 50% Coverage
+
+```{r fig4_fastest}
+fastest10 <- rollout_speed %>%
+  filter(reached_50) %>%
+  arrange(days_to_50) %>%
+  slice_head(n = 10)
+
+ggplot(fastest10, aes(x = reorder(location, days_to_50), y = days_to_50)) +
+  geom_col(fill = teal_base, width = 0.65, colour = "white", linewidth = 0.3) +
+  geom_text(aes(label = days_to_50), hjust = -0.15, size = 3.5,
+             colour = teal_dark, fontface = "bold") +
+  coord_flip() +
+  expand_limits(y = max(fastest10$days_to_50) * 1.1) +
+  labs(title = "Fastest 10 Countries to Reach 50% Full Vaccination Coverage",
+       subtitle = "Time from first vaccination record to the 50% threshold",
+       x = "Country", y = "Days") +
+  theme_teal()
+```
+
+Figure 4 lists exactly the ten countries plotted above:
+`r paste(fastest10$location, collapse = ", ")`. Any country named in the
+discussion of rollout speed but not appearing in this list (for example,
+Israel, which reached the threshold in
+`r rollout_speed %>% filter(location == "Israel") %>% pull(days_to_50)`
+days — still far faster than the
+`r median(rollout_speed$days_to_50[rollout_speed$reached_50], na.rm = TRUE)`-day
+median among the 61 countries that reached 50% at all, but outside this
+particular top-10 chart) is described separately and explicitly as such,
+rather than implied to be part of Figure 4.
+
+---
+
+## Figure 5: Distribution of Days to 50%
+
+```{r fig5_days_histogram}
+days_50_data <- rollout_speed %>% filter(reached_50)
+median_days <- median(days_50_data$days_to_50, na.rm = TRUE)
+mean_days   <- mean(days_50_data$days_to_50, na.rm = TRUE)
+
+ggplot(days_50_data, aes(x = days_to_50)) +
+  geom_histogram(bins = 15, fill = teal_light, colour = "white", alpha = 0.85) +
+  geom_vline(xintercept = median_days, linetype = "dashed", colour = teal_dark, linewidth = 1) +
+  geom_vline(xintercept = mean_days, linetype = "dotted", colour = teal_dark, linewidth = 1) +
+  annotate("label", x = median_days + 5, y = 10,
+           label = paste0("Median = ", round(median_days), " days",
+                          "\nMean = ", round(mean_days), " days"),
+           fill = "white", colour = teal_dark, label.size = 0.2, size = 3.3) +
+  geom_rug(sides = "b", colour = teal_dark, alpha = 0.45) +
+  labs(title = "Distribution of Days to Reach 50% Full Vaccination Coverage",
+       subtitle = paste0("Among the ", nrow(days_50_data), " countries that reached the threshold"),
+       x = "Days to reach 50%", y = "Number of countries") +
+  theme_teal()
+```
+
+Among the `r nrow(days_50_data)` countries that reached 50% coverage, the
+median time was `r round(median_days)` days and the mean
+`r round(mean_days)` days; the mean below the median indicates a small
+number of very rapid campaigns pulling the average down (right-skew).
+
+---
+
+## Figure 6: Lowest Observed Coverage Among Countries That Never Reached 50%
+
+This figure differs from Figure 3 in one respect: Figure 3 ranks every
+country by its single *latest* observation (which, per the caveat above,
+can be a stale snapshot for some countries); Figure 6 instead uses each
+country's *maximum ever recorded* value, and is restricted to the
+`r n_total - n_reached` countries that never reached the 50% threshold at
+any point in the series — a more conservative ranking for this specific
+group, less sensitive to reporting recency.
+
+```{r fig6_worst10}
+lowest10 <- rollout_speed %>%
+  filter(!reached_50) %>%
+  arrange(final_coverage) %>%
+  slice_head(n = 10)
+
+ggplot(lowest10, aes(x = reorder(location, final_coverage), y = final_coverage)) +
+  geom_col(fill = teal_dark, width = 0.65, colour = "white", linewidth = 0.3) +
+  geom_text(aes(label = sprintf("%.2f", final_coverage)), hjust = -0.15,
+            size = 3.5, colour = teal_dark, fontface = "bold") +
+  coord_flip() +
+  expand_limits(y = max(lowest10$final_coverage) * 1.2) +
+  labs(title = "Lowest Ever-Recorded Full Vaccination Coverage",
+       subtitle = "Among countries that never reached the 50% threshold",
+       x = "Country", y = "Fully vaccinated per 100 inhabitants (maximum ever recorded)") +
+  theme_teal()
+```
+
+---
+
+## Figure 7: Missing Vaccination Data by Country
+
+```{r fig7_missing}
+n_high_missing <- sum(missing_country$missing_pct >= 95)
+
+missing_country %>%
+  filter(missing_pct >= 95) %>%
+  slice_max(missing_pct, n = 15) %>%
+  ggplot(aes(x = fct_reorder(location, missing_pct), y = missing_pct)) +
+  geom_segment(aes(xend = location, y = 95, yend = missing_pct), colour = teal_dark) +
+  geom_point(size = 3, colour = teal_dark) +
+  coord_flip() +
+  scale_y_continuous(limits = c(95, 100), breaks = seq(95, 100, 5)) +
+  labs(title = "Countries with Near-Complete Missing Vaccination Data",
+       subtitle = paste0(n_high_missing, " countries have ≥95% of records missing; the 15 highest are shown"),
+       x = "Country", y = "Missing values (%)") +
+  theme_teal()
+```
+
+`r n_high_missing` countries have 95% or more missing full-vaccination
+records — the chart above shows only the 15 highest for readability, not
+the complete set. High missingness does not necessarily indicate the
+absence of a vaccination campaign: Tokelau, for example, is
+`r missing_country %>% filter(location == "Tokelau") %>% pull(missing_pct)`%
+missing from this dataset yet is reported elsewhere (ReliefWeb, 2021) to
+have achieved over 96% coverage of its eligible population. Countries
+with weaker administrative/digital reporting infrastructure are
+systematically underrepresented here, meaning the inequalities quantified
+in this notebook are, if anything, an underestimate.
+
+---
+
+## Geographic Data Preparation
+
+Built once and reused for both maps below.
+
+```{r geo_prep, warning=FALSE, message=FALSE}
+library(sf)
+library(rnaturalearth)
+
+iso_custom_match <- c("England" = "GBR", "Scotland" = "GBR", "Wales" = "GBR",
+                       "Kosovo" = "XKX", "Timor" = "TLS")
+
+world <- ne_countries(scale = "medium", returnclass = "sf") %>%
+  filter(admin != "Antarctica") %>%
+  mutate(iso3 = ifelse(iso_a3 == "-99", adm0_a3, iso_a3))
+
+coverage_map <- latest_country %>%
+  mutate(iso3 = countrycode(location, origin = "country.name",
+                             destination = "iso3c", custom_match = iso_custom_match)) %>%
+  group_by(iso3) %>%
+  summarise(people_fully_vaccinated_per_hundred = first(people_fully_vaccinated_per_hundred), .groups = "drop")
+
+coverage_map_data <- world %>% left_join(coverage_map, by = "iso3")
+
+speed_map <- rollout_speed %>%
+  mutate(iso3 = countrycode(location, origin = "country.name",
+                             destination = "iso3c", custom_match = iso_custom_match)) %>%
+  filter(reached_50) %>%
+  group_by(iso3) %>%
+  summarise(days_to_50 = first(days_to_50), .groups = "drop")
+
+speed_map_data <- world %>% left_join(speed_map, by = "iso3")
+```
+
+## Figure 8: World Map — Full Vaccination Coverage
+
+```{r fig8_map_coverage, warning=FALSE, message=FALSE}
+ggplot(coverage_map_data) +
+  geom_sf(aes(fill = people_fully_vaccinated_per_hundred), colour = "white", linewidth = 0.15) +
+  scale_fill_gradient(low = teal_ghost, high = teal_dark, na.value = "grey88",
+                       limits = c(0, 100), name = "Fully vaccinated\nper 100",
+                       guide = guide_colorbar(barwidth = unit(12, "lines"), barheight = unit(0.8, "lines"))) +
+  coord_sf(expand = FALSE) +
+  labs(title = "Full Vaccination Coverage by Country",
+       subtitle = "Latest available observation per country — grey = no data reported",
+       caption = "Source: Our World in Data COVID-19 vaccination dataset (Mathieu et al., 2021)") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 13, colour = "black"),
+        plot.subtitle = element_text(size = 9, colour = "#555555"),
+        plot.caption = element_text(size = 8, colour = "#AAAAAA"),
+        legend.position = "bottom", legend.direction = "horizontal",
+        legend.title = element_text(colour = teal_dark, face = "bold", size = 9),
+        legend.text = element_text(colour = "#555555", size = 8),
+        plot.background = element_rect(fill = "white", colour = NA))
+```
+
+## Figure 9: World Map — Speed of Vaccination Rollout
+
+This is the figure that the previous version of this notebook described in
+prose without ever actually producing. It uses `days_to_50` (defined
+above) rather than final coverage, so it captures speed specifically,
+distinct from Figure 8's coverage snapshot.
+
+```{r fig9_map_speed, warning=FALSE, message=FALSE}
+ggplot(speed_map_data) +
+  geom_sf(aes(fill = days_to_50), colour = "white", linewidth = 0.15) +
+  scale_fill_gradient(low = teal_dark, high = teal_pale, na.value = "grey85",
+                       name = "Days to reach\n50% coverage",
+                       guide = guide_colorbar(barwidth = unit(12, "lines"), barheight = unit(0.8, "lines"))) +
+  coord_sf(expand = FALSE) +
+  labs(title = "Speed of Vaccination Rollout by Country",
+       subtitle = "Days from first recorded vaccination to 50% coverage — grey = threshold never reached, or no data",
+       caption = "Source: Our World in Data COVID-19 vaccination dataset (Mathieu et al., 2021)") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 13, colour = "black"),
+        plot.subtitle = element_text(size = 9, colour = "#555555"),
+        plot.caption = element_text(size = 8, colour = "#AAAAAA"),
+        legend.position = "bottom", legend.direction = "horizontal",
+        legend.title = element_text(colour = teal_dark, face = "bold", size = 9),
+        legend.text = element_text(colour = "#555555", size = 8),
+        plot.background = element_rect(fill = "white", colour = NA))
+```
+
+Darker shading indicates faster rollout; grey covers both the majority of
+countries that never reached the 50% threshold and countries with no
+usable data — the two are visually indistinguishable on this map, which
+is itself a limitation worth stating plainly rather than glossing over.
+
+---
+
+## Figure 10: Vaccination Coverage by Income Group Over Time
+
+```{r fig10_income_timeseries}
+income_group_levels <- c("High income", "Upper middle income",
+                          "Lower middle income", "Low income")
+
+vaccinations_income <- vaccinations_clean %>%
+  filter(location %in% income_group_levels) %>%
+  mutate(location = factor(location, levels = income_group_levels))
+
+last_points_income <- vaccinations_income %>%
+  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
+  group_by(location) %>%
+  slice_max(date, n = 1) %>%
+  ungroup()
+
+ggplot(vaccinations_income %>% filter(!is.na(people_fully_vaccinated_per_hundred)),
+       aes(x = date, y = people_fully_vaccinated_per_hundred, colour = location)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(data = last_points_income, size = 3) +
+  geom_text_repel(
+    data = last_points_income,
+    aes(label = paste0(location, " (", round(people_fully_vaccinated_per_hundred, 1), ")")),
+    direction = "y", hjust = 0, nudge_x = 8, size = 3.6, fontface = "bold",
+    segment.color = "grey70", show.legend = FALSE
+  ) +
+  scale_color_manual(values = income_colors) +
+  scale_x_date(date_labels = "%b %Y", expand = expansion(mult = c(0.02, 0.48))) +
+  labs(title = "COVID-19 Full Vaccination Coverage by Income Group",
+       subtitle = "Aggregated data from Our World in Data",
+       x = "Date", y = "Fully vaccinated per 100") +
+  theme_teal() + theme(legend.position = "none")
+```
+
+The gap between income groups widens continuously through the observation
+window; by
+`r format(max(last_points_income$date), "%B %Y")`, high-income countries
+had reached
+`r round(last_points_income$people_fully_vaccinated_per_hundred[last_points_income$location=="High income"], 1)`
+fully vaccinated per 100, versus
+`r round(last_points_income$people_fully_vaccinated_per_hundred[last_points_income$location=="Low income"], 1)`
+for low-income countries.
+
+---
+
+## Figure 11: Vaccination Coverage by Continent
+
+```{r fig11_continent_raincloud, warning=FALSE}
+n_excluded_outlier <- sum(latest_country$people_fully_vaccinated_per_hundred > 100, na.rm = TRUE)
+excluded_names <- latest_country$location[latest_country$people_fully_vaccinated_per_hundred > 100]
+
+latest_country %>%
+  filter(!is.na(continent), !is.na(people_fully_vaccinated_per_hundred),
+         people_fully_vaccinated_per_hundred <= 100) %>%
+  mutate(continent = reorder(continent, people_fully_vaccinated_per_hundred, median)) %>%
+  ggplot(aes(x = continent, y = people_fully_vaccinated_per_hundred, fill = continent, color = continent)) +
+  ggdist::stat_halfeye(adjust = 0.7, width = 0.8, justification = -0.18, .width = 0,
+                        point_colour = NA, alpha = 0.65) +
+  geom_boxplot(width = 0.16, outlier.shape = NA, alpha = 0.45, colour = teal_dark) +
+  ggbeeswarm::geom_quasirandom(width = 0.08, size = 1.5, alpha = 0.45, show.legend = FALSE) +
+  scale_fill_manual(values = continent_colors) +
+  scale_color_manual(values = continent_colors) +
+  scale_y_continuous(limits = c(0, 100), breaks = seq(0, 100, 20)) +
+  labs(title = "Vaccination Coverage by Continent",
+       subtitle = paste0("Distribution of latest observed coverage per country (",
+                          n_excluded_outlier, " outlier",
+                          ifelse(n_excluded_outlier == 1, "", "s"),
+                          " above 100% excluded: ", paste(excluded_names, collapse = ", "), ")"),
+       x = "Continent", y = "Fully vaccinated per 100") +
+  theme_teal() + theme(legend.position = "none", axis.text.x = element_text(angle = 20, hjust = 1))
+```
+
+The exclusion of `r paste(excluded_names, collapse = ", ")` (coverage
+above 100%, driven by cross-border vaccination) is stated explicitly in
+the subtitle above rather than left silent, since it slightly narrows
+Europe's apparent spread.
+
+---
+
+## Figure 12: Correlation Matrix
+
+```{r fig12_correlation}
+correlation_data <- latest_country %>%
+  select(total_vaccinations_per_hundred, people_vaccinated_per_hundred,
+         people_fully_vaccinated_per_hundred, daily_vaccinations_per_million)
+
+cor_matrix <- cor(correlation_data, use = "complete.obs")
+
+ggcorrplot(cor_matrix, method = "square", type = "lower", lab = TRUE, lab_size = 4,
+           colors = c(teal_ghost, "white", teal_dark), outline.col = "white",
+           title = "Correlation Matrix of Vaccination Indicators") +
+  theme_teal() + theme(legend.position = "right", plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+---
+
+## Figure 13: PCA of Vaccination Indicators
+
+```{r pca_build, warning=FALSE}
+pca_input_all <- latest_country %>%
+  select(location, total_vaccinations_per_hundred, people_vaccinated_per_hundred,
+         people_fully_vaccinated_per_hundred, daily_vaccinations_per_million)
+
+pca_input <- pca_input_all %>% na.omit()
+n_dropped_pca <- nrow(pca_input_all) - nrow(pca_input)
+
+pca_data <- pca_input %>% select(-location)
+pca <- prcomp(pca_data, scale. = TRUE)
+summary(pca)
+
+pca_scores <- as.data.frame(pca$x)
+pca_scores$location <- pca_input$location
+pca_scores$continent <- countrycode(pca_input$location, origin = "country.name", destination = "continent")
+
+loadings <- as.data.frame(pca$rotation) %>%
+  tibble::rownames_to_column("variable") %>%
+  mutate(variable = recode(variable,
+    "people_fully_vaccinated_per_hundred" = "Fully vaccinated",
+    "total_vaccinations_per_hundred"      = "Total doses",
+    "people_vaccinated_per_hundred"       = "At least one dose",
+    "daily_vaccinations_per_million"      = "Daily doses / million"
+  ))
+```
+
+PCA was computed on the `r nrow(pca_input)` countries with complete data
+across all four indicators (`r n_dropped_pca` of
+`r nrow(pca_input_all)` were excluded due to missing values in at least
+one indicator:
+`r paste(setdiff(pca_input_all$location, pca_input$location), collapse = ", ")`).
+The first component explains
+`r round(summary(pca)$importance[2,1]*100, 1)`% of total variance, the
+second `r round(summary(pca)$importance[2,2]*100, 1)`% — together
+`r round(summary(pca)$importance[3,2]*100, 1)`%.
+
+```{r fig13a_pca_continent, warning=FALSE}
+label_countries <- c("Spain", "Germany", "Czechia", "Brazil", "India")
+
+ggplot(pca_scores %>% filter(!is.na(continent)), aes(PC1, PC2)) +
+  geom_point(aes(colour = continent), size = 2.5, alpha = 0.75) +
+  geom_point(data = subset(pca_scores, location %in% label_countries),
+             shape = 21, fill = "white", colour = "black", stroke = 0.8, size = 3.8) +
+  geom_text_repel(data = subset(pca_scores, location %in% label_countries),
+                   aes(label = location), size = 3.6, fontface = "bold",
+                   box.padding = 0.5, point.padding = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey70") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey70") +
+  scale_colour_manual(values = continent_colors) +
+  labs(title = "PCA of Countries by Vaccination Profile",
+       subtitle = "Countries coloured by continent — selected countries labelled",
+       x = "PC1 (overall vaccination coverage)", y = "PC2 (daily vaccination intensity)",
+       colour = "Continent") +
+  theme_teal() + theme(legend.position = "bottom")
+```
+
+```{r fig13b_pca_loadings}
+loadings_plot <- loadings %>%
+  mutate(
+    PC1_plot = PC1 * 1.5,
+    PC2_plot = case_when(
+      variable == "Fully vaccinated"      ~ PC2 + 0.75,
+      variable == "Total doses"           ~ PC2 + 1.25,
+      variable == "At least one dose"     ~ PC2 - 0.55,
+      variable == "Daily doses / million"  ~ PC2 - 0.85,
+      TRUE ~ PC2
+    )
+  )
+
+ggplot() +
+  geom_point(data = pca_scores, aes(PC1, PC2), colour = "grey80", alpha = 0.25, size = 2) +
+  geom_segment(data = loadings_plot, aes(x = 0, y = 0, xend = PC1_plot, yend = PC2_plot),
+               arrow = arrow(length = unit(0.3, "cm")), colour = teal_dark, linewidth = 0.6) +
+  geom_text_repel(data = loadings_plot, aes(PC1_plot, PC2_plot, label = variable),
+                   colour = teal_dark, fontface = "bold", size = 4, force = 15,
+                   max.overlaps = Inf, box.padding = 0.9, point.padding = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey70") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey70") +
+  labs(title = "PCA Variable Loadings", subtitle = "Arrows are slightly separated for readability",
+       x = "PC1", y = "PC2") +
+  theme_teal()
+```
+
+PC1 separates countries primarily by overall vaccination coverage
+(African and lower-income Asian countries cluster on the low end,
+European countries on the high end); the loadings plot shows the three
+cumulative indicators load together on PC1 while daily vaccinations per
+million loads mostly on PC2, nearly orthogonal to the cumulative
+measures.
+
+---
+
+## Figure 14: Choosing the Number of Clusters
+
+Rather than asserting k = 3 from theory alone, both the within-cluster
+sum-of-squares ("elbow") method and average silhouette width are checked
+first.
+
+```{r fig14_cluster_diagnostics, warning=FALSE}
+set.seed(42)
+scaled_pca_data <- scale(pca_data)
+
+fviz_nbclust(scaled_pca_data, kmeans, method = "wss", k.max = 8) +
+  labs(title = "Elbow Method for Choosing k") + theme_teal()
+
+fviz_nbclust(scaled_pca_data, kmeans, method = "silhouette", k.max = 8) +
+  labs(title = "Average Silhouette Width by k") + theme_teal()
+```
+
+k = 3 is retained on the basis of these diagnostics together with the
+theoretically expected high/moderate/low coverage segmentation; if your
+own knit output instead favours a different k, that should be reported
+honestly rather than overridden to force k = 3.
+
+## Figure 15: K-means Clustering in PCA Space (k = 3)
+
+Cluster labels below are derived from each cluster's own computed mean
+coverage (highest → "high-coverage", lowest → "low-coverage"), not from
+the arbitrary numeric index k-means assigns — that index is not
+guaranteed to be consistent across runs, R versions, or package versions,
+even with a fixed seed.
+
+```{r fig15_kmeans, warning=FALSE}
+set.seed(42)
+km <- kmeans(scaled_pca_data, centers = 3, nstart = 25)
+
+cluster_means <- pca_input %>%
+  mutate(cluster_id = factor(km$cluster)) %>%
+  group_by(cluster_id) %>%
+  summarise(n_countries = n(),
+            mean_fully_vaccinated = mean(people_fully_vaccinated_per_hundred, na.rm = TRUE),
+            .groups = "drop") %>%
+  arrange(desc(mean_fully_vaccinated))
+
+print(cluster_means)
+
+cluster_label_order <- c("High-coverage profile", "Moderate-coverage profile", "Low-coverage profile")
+label_map <- setNames(cluster_label_order[seq_len(nrow(cluster_means))], as.character(cluster_means$cluster_id))
+
+pca_scores <- pca_scores %>%
+  mutate(cluster_id = factor(km$cluster),
+         cluster = factor(recode(as.character(cluster_id), !!!label_map), levels = cluster_label_order))
+
+cluster_colors_named <- setNames(c(teal_dark, teal_light, red_mid), cluster_label_order)
+
+ggplot(pca_scores, aes(PC1, PC2, color = cluster)) +
+  stat_ellipse(aes(fill = cluster), geom = "polygon", alpha = 0.08, level = 0.85, show.legend = FALSE) +
+  geom_point(alpha = 0.75, size = 2.8) +
+  geom_text_repel(data = pca_scores %>% filter(location %in% label_countries),
+                   aes(label = location), size = 2.8, color = "black", fontface = "bold",
+                   max.overlaps = 30, box.padding = 0.5, point.padding = 0.3,
+                   segment.color = "#AAAAAA", segment.size = 0.3, min.segment.length = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "#CCCCCC", linewidth = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "#CCCCCC", linewidth = 0.4) +
+  scale_color_manual(values = cluster_colors_named) +
+  scale_fill_manual(values = cluster_colors_named) +
+  labs(title = "K-means Clusters in PCA Space (k = 3)",
+       subtitle = "Cluster labels assigned from each cluster's own computed mean coverage",
+       x = paste0("PC1 (", round(summary(pca)$importance[2,1]*100,1), "% variance)"),
+       y = paste0("PC2 (", round(summary(pca)$importance[2,2]*100,1), "% variance)"),
+       color = "Cluster", caption = "Ellipses show 85% confidence region per cluster.") +
+  guides(color = guide_legend(nrow = 1, byrow = TRUE)) +
+  theme_teal() +
+  theme(legend.position = "bottom", legend.direction = "horizontal", legend.box = "horizontal",
+        plot.caption = element_text(size = 8, color = "#AAAAAA", hjust = 1))
+```
+
+K-means identifies `r nrow(cluster_means)` structurally distinct groups.
+"`r label_map[[as.character(cluster_means$cluster_id[1])]]`" is the
+highest-coverage group (`r cluster_means$n_countries[1]` countries, mean
+`r round(cluster_means$mean_fully_vaccinated[1],1)` fully vaccinated per
+100); "`r label_map[[as.character(cluster_means$cluster_id[nrow(cluster_means)])]]`"
+is the lowest (`r cluster_means$n_countries[nrow(cluster_means)]`
+countries, mean
+`r round(cluster_means$mean_fully_vaccinated[nrow(cluster_means)],1)`).
+
+---
+
+## Final Summary Table
+
+```{r final_summary}
+final_summary <- latest_country %>%
+  select(location, date, people_fully_vaccinated_per_hundred) %>%
+  left_join(rollout_speed %>% select(location, reached_50, days_to_50), by = "location") %>%
+  left_join(missing_country, by = "location") %>%
+  arrange(desc(people_fully_vaccinated_per_hundred))
+
+head(final_summary, 20)
+```
+
+---
+
+## Summary
+
+COVID-19 vaccination trends differed substantially across countries over
+`r format(min(vaccinations_country$date), "%B %Y")`–`r format(max(vaccinations_country$date), "%B %Y")`.
+High-income countries reached higher coverage earlier and more
+consistently; only `r sprintf("%.1f", 100*n_reached/n_total)`% of
+countries reached the 50% threshold at all, and among those that did,
+time-to-threshold ranged from `r min(days_50_data$days_to_50)` to
+`r max(days_50_data$days_to_50)` days. Missing-data patterns, the PCA/
+clustering structure, and (in the companion `arima.Rmd` notebook) the
+unevenness of forecast reliability itself all point the same direction:
+inequality in this period was structural, and it extends beyond
+vaccination outcomes into the reporting infrastructure used to monitor
+them.

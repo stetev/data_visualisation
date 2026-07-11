@@ -1,0 +1,354 @@
+
+
+```{r setup, message=FALSE, warning=FALSE}
+library(forecast)
+library(ggplot2)
+library(dplyr)
+library(countrycode)
+
+Sys.setlocale("LC_TIME", "C")
+
+teal_dark   <- "#015c6d"
+teal_mid    <- "#017a8f"
+teal_base   <- "#019ab5"
+teal_light  <- "#4dc2d6"
+teal_pale   <- "#a8e2ec"
+teal_ghost  <- "#d9f2f6"
+
+red_dark    <- "#c02200"
+red_mid     <- "#fd300b"
+red_base    <- "#fd5a38"
+red_light   <- "#fe8a70"
+red_pale    <- "#feb9a8"
+red_ghost   <- "#fee5df"
+
+country_colors <- c(
+  "Germany" = teal_dark,
+  "Spain"   = teal_base,
+  "Czechia" = teal_light,
+  "Brazil"  = red_base,
+  "India"   = red_light
+)
+
+continent_colors <- c(
+  "Africa"   = red_dark,
+  "Asia"     = red_base,
+  "Oceania"  = teal_light,
+  "Americas" = teal_base,
+  "Europe"   = teal_dark
+)
+
+income_colors <- c(
+  "High income"         = teal_dark,
+  "Upper middle income" = teal_base,
+  "Lower middle income" = red_light,
+  "Low income"          = red_dark
+)
+
+cluster_colors_named <- c(
+  "1" = teal_base,
+  "2" = teal_dark,
+  "3" = red_mid
+)
+
+theme_teal <- function() {
+  theme_minimal() +
+    theme(
+      plot.title       = element_text(face = "bold", colour = "black"),
+      plot.subtitle    = element_text(colour = "black"),
+      axis.title       = element_text(colour = teal_dark),
+      axis.text        = element_text(colour = "#555555"),
+      legend.title     = element_text(colour = teal_dark, face = "bold"),
+      legend.text      = element_text(colour = "#555555"),
+      panel.grid.major = element_line(colour = teal_ghost),
+      panel.grid.minor = element_blank()
+    )
+}
+```
+
+```{r}
+plot_forecast_teal <- function(df, fc, country_name, y_label) {
+  
+  last_date <- max(df$date)
+  future_dates <- seq(
+    from = last_date + 1,
+    by = "day",
+    length.out = length(fc$mean)
+  )
+  
+  observed_df <- df %>%
+    select(
+      date,
+      value = people_fully_vaccinated_per_hundred
+    )
+  
+  forecast_df <- data.frame(
+    date = future_dates,
+    mean = as.numeric(fc$mean),
+    lo80 = as.numeric(fc$lower[, 1]),
+    hi80 = as.numeric(fc$upper[, 1]),
+    lo95 = as.numeric(fc$lower[, 2]),
+    hi95 = as.numeric(fc$upper[, 2])
+  )
+  
+  ggplot() +
+    geom_ribbon(
+      data = forecast_df,
+      aes(x = date, ymin = lo95, ymax = hi95),
+      fill = teal_ghost,
+      alpha = 0.8
+    ) +
+    geom_ribbon(
+      data = forecast_df,
+      aes(x = date, ymin = lo80, ymax = hi80),
+      fill = teal_pale,
+      alpha = 0.85
+    ) +
+    geom_line(
+      data = observed_df,
+      aes(x = date, y = value),
+      colour = "#555555",
+      linewidth = 0.75
+    ) +
+    geom_line(
+      data = forecast_df,
+      aes(x = date, y = mean),
+      colour = red_mid,
+      linewidth = 1.15
+    ) +
+    geom_vline(
+      xintercept = last_date,
+      linetype = "dashed",
+      colour = teal_dark,
+      linewidth = 0.5
+    ) +
+    scale_x_date(date_labels = "%b %Y") +
+    labs(
+      title = paste("ARIMA Forecast:", country_name, "Full Vaccination Coverage"),
+      subtitle = "30-day forecast with 80% and 95% confidence intervals",
+      x = "Date",
+      y = y_label
+    ) +
+    theme_teal()
+}
+```
+
+```{r}
+spain <- vaccinations_country %>%
+  filter(
+    location == "Spain",
+    !is.na(people_fully_vaccinated_per_hundred)
+  ) %>%
+  arrange(date)
+
+ts_spain <- ts(
+  spain$people_fully_vaccinated_per_hundred,
+  frequency = 7
+)
+
+fit_spain <- auto.arima(
+  ts_spain,
+  d = 1,
+  D = 1,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+
+summary(fit_spain)
+
+checkresiduals(fit_spain)
+```
+
+```{r}
+accuracy_results <- data.frame()
+
+countries_arima <- c("Spain", "Czechia", "India")
+
+for (ctry in countries_arima) {
+  
+  df <- vaccinations_country %>%
+    filter(
+      location == ctry,
+      !is.na(people_fully_vaccinated_per_hundred)
+    ) %>%
+    arrange(date)
+  
+  n <- nrow(df)
+  
+  if (n < 30) {
+    message(paste("Skipping", ctry, "- not enough data"))
+    next
+  }
+  
+  train <- df$people_fully_vaccinated_per_hundred[1:round(n * 0.8)]
+  test  <- df$people_fully_vaccinated_per_hundred[(round(n * 0.8) + 1):n]
+  
+  ts_train <- ts(train, frequency = 7)
+  
+  fit_arima_train <- auto.arima(
+    ts_train,
+    d = 1,
+    D = 1,
+    stepwise = FALSE,
+    approximation = FALSE
+  )
+  
+  fit_ets_train <- ets(ts_train)
+  
+  h <- length(test)
+  
+  acc_arima <- accuracy(
+    forecast(fit_arima_train, h = h),
+    test
+  )
+  
+  acc_ets <- accuracy(
+    forecast(fit_ets_train, h = h),
+    test
+  )
+  
+  accuracy_results <- rbind(
+    accuracy_results,
+    data.frame(
+      Country = ctry,
+      Model = "ARIMA",
+      RMSE = acc_arima["Test set", "RMSE"],
+      MAE  = acc_arima["Test set", "MAE"],
+      MAPE = acc_arima["Test set", "MAPE"]
+    ),
+    data.frame(
+      Country = ctry,
+      Model = "ETS",
+      RMSE = acc_ets["Test set", "RMSE"],
+      MAE  = acc_ets["Test set", "MAE"],
+      MAPE = acc_ets["Test set", "MAPE"]
+    )
+  )
+}
+
+accuracy_results
+
+
+```
+
+
+```{r}
+accuracy_results %>%
+  ggplot(aes(
+    x = Country,
+    y = RMSE,
+    fill = Model
+  )) +
+  geom_col(
+    position = position_dodge(width = 0.75),
+    width = 0.65,
+    colour = "white",
+    linewidth = 0.3
+  ) +
+  scale_fill_manual(
+    values = c(
+      "ARIMA" = teal_base,
+      "ETS" = red_base
+    )
+  ) +
+  labs(
+    title = "ARIMA vs ETS Forecast Accuracy",
+    subtitle = "Lower RMSE indicates better predictive performance on the test set",
+    x = "Country",
+    y = "RMSE",
+    fill = "Model"
+  ) +
+  theme_teal()
+```
+
+
+```{r}
+countries_arima <- c("Spain", "Czechia", "India")
+
+for (ctry in countries_arima) {
+  
+  df <- vaccinations_country %>%
+    filter(
+      location == ctry,
+      !is.na(people_fully_vaccinated_per_hundred)
+    ) %>%
+    arrange(date)
+  
+  if (nrow(df) < 30) {
+    message(paste("Skipping", ctry, "- not enough data"))
+    next
+  }
+  
+  ts_ctry <- ts(
+    df$people_fully_vaccinated_per_hundred,
+    frequency = 7
+  )
+  
+  fit_ctry <- auto.arima(
+    ts_ctry,
+    d = 1,
+    D = 1,
+    stepwise = FALSE,
+    approximation = FALSE
+  )
+  
+  fc_ctry <- forecast(fit_ctry, h = 30)
+  
+  print(
+    plot_forecast_teal(
+      df = df,
+      fc = fc_ctry,
+      country_name = ctry,
+      y_label = "Fully vaccinated per 100"
+    )
+  )
+}
+```
+
+
+## Multi-Country ARIMA Forecast (Inequality Comparison)
+
+```{r multicountry_arima, message=FALSE, warning=FALSE}
+countries_arima <- c("Germany", "India", "Spain")
+
+for (ctry in countries_arima) {
+
+  df <- vaccinations_country %>%
+    filter(
+      location == ctry,
+      !is.na(people_fully_vaccinated_per_hundred)
+    ) %>%
+    arrange(date)
+
+  if (nrow(df) < 30) {
+    message(paste("Skipping", ctry, "- not enough data"))
+    next
+  }
+
+  ts_ctry <- ts(
+    df$people_fully_vaccinated_per_hundred,
+    frequency = 7
+  )
+
+  fit_ctry <- auto.arima(
+    ts_ctry,
+    d = 1,
+    D = 1,
+    stepwise = FALSE,
+    approximation = FALSE
+  )
+
+  fc_ctry <- forecast(fit_ctry, h = 30)
+
+  print(
+    plot_forecast_teal(
+      df = df,
+      fc = fc_ctry,
+      country_name = ctry,
+      y_label = "Fully vaccinated per 100"
+    )
+  )
+}
+```
+
+

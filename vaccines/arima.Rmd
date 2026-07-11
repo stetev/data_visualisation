@@ -9,112 +9,47 @@ library(dplyr)
 library(countrycode)
 
 
-orange_dark   <- "#cc5500"
-orange_mid    <- "#ff6200"
-orange_base   <- "#ff8e00"
-orange_light  <- "#ffb347"
-orange_pale   <- "#ffd280"
-orange_ghost  <- "#ffe8b8"
+teal_dark   <- "#cc5500"
+teal_mid    <- "#ff6200"
+teal_base   <- "#ff8e00"
+teal_light  <- "#ffb347"
+teal_pale   <- "#ffd280"
+teal_ghost  <- "#ffe8b8"
 
 
 continent_colors <- c(
-  "Africa"   = orange_dark,
-  "Asia"     = orange_mid,
-  "Oceania"  = orange_base,
-  "Americas" = orange_light,
-  "Europe"   = orange_pale
+  "Africa"   = teal_dark,
+  "Asia"     = teal_mid,
+  "Oceania"  = teal_base,
+  "Americas" = teal_light,
+  "Europe"   = teal_pale
 )
 
 
 income_colors <- c(
-  "High income"         = orange_dark,
-  "Upper middle income" = orange_base,
-  "Lower middle income" = orange_light,
-  "Low income"          = orange_pale
+  "High income"         = teal_dark,
+  "Upper middle income" = teal_base,
+  "Lower middle income" = teal_light,
+  "Low income"          = teal_pale
 )
 
 
-theme_orange <- function() {
+theme_teal <- function() {
   theme_minimal() +
     theme(
       plot.title       = element_text(face = "bold", colour = "black"),
       plot.subtitle    = element_text(colour = "black"),
-      axis.title       = element_text(colour = orange_dark),
+      axis.title       = element_text(colour = teal_dark),
       axis.text        = element_text(colour = "#555555"),
-      legend.title     = element_text(colour = orange_dark, face = "bold"),
-      panel.grid.major = element_line(colour = orange_ghost),
+      legend.title     = element_text(colour = teal_dark, face = "bold"),
+      panel.grid.major = element_line(colour = teal_ghost),
       panel.grid.minor = element_blank()
     )
 }
 ```
 
----
 
-## Vaccination Coverage by Continent
 
-```{r continent_boxplot, warning=FALSE}
-latest_country <- latest_country %>%
-  mutate(
-    continent = countrycode(location,
-                            origin      = "country.name",
-                            destination = "continent")
-  )
-
-latest_country %>%
-  filter(!is.na(continent)) %>%
-  ggplot(aes(
-    x    = reorder(continent,
-                   people_fully_vaccinated_per_hundred,
-                   median),
-    y    = people_fully_vaccinated_per_hundred,
-    fill = continent
-  )) +
-  geom_boxplot(show.legend = FALSE, colour = orange_dark, alpha = 0.85) +
-  scale_fill_manual(values = continent_colors) +
-  labs(
-    title    = "Vaccination Coverage by Continent",
-    subtitle = "Latest available observation per country",
-    x        = "Continent",
-    y        = "Fully vaccinated per 100"
-  ) +
-  theme_orange()
-```
-
-Africa's median vaccination coverage was near zero, while Europe's median exceeded 50 fully vaccinated individuals per 100 inhabitants. This contrast illustrates a pronounced continental dimension of global health inequality during the early phase of the COVID-19 vaccination campaign.
-
----
-
-## Vaccination Coverage by Income Group Over Time
-
-```{r income_timeseries, warning=FALSE}
-income_groups <- c("High income", "Upper middle income",
-                   "Lower middle income", "Low income")
-
-vaccinations_income <- vaccinations_clean %>%
-  filter(location %in% income_groups) %>%
-  mutate(location = factor(location, levels = income_groups))
-
-vaccinations_income %>%
-  filter(!is.na(people_fully_vaccinated_per_hundred)) %>%
-  ggplot(aes(
-    x     = date,
-    y     = people_fully_vaccinated_per_hundred,
-    color = location
-  )) +
-  geom_line(linewidth = 1.1) +
-  scale_color_manual(values = income_colors) +
-  scale_x_date(date_labels = "%b %Y") +
-  labs(
-    title    = "COVID-19 Full Vaccination Coverage by Income Group",
-    subtitle = "Aggregated data from Our World in Data",
-    x        = "Date",
-    y        = "Fully vaccinated per 100",
-    color    = "Income Group"
-  ) +
-  theme_orange()
-```
-
-The income group time series reveals a widening gap between high-income and low-income countries throughout 2021. High-income countries accelerated rapidly while low-income countries remained near zero, providing direct evidence of structural global health inequality in vaccine distribution.
 
 ---
 
@@ -138,8 +73,8 @@ fit <- auto.arima(ts_germany, d = 1, D = 1,
 summary(fit)
 ```
 ```{r}
-# Custom forecast plot function — full orange control
-plot_forecast_orange <- function(fc, title_text, y_label) {
+# Custom forecast plot function — full teal control
+plot_forecast_teal <- function(fc, title_text, y_label) {
   
   # Extract components from the forecast object
   fitted_vals <- as.numeric(fc$x)
@@ -167,11 +102,11 @@ plot_forecast_orange <- function(fc, title_text, y_label) {
     # 95% CI band (outermost, palest)
     geom_ribbon(data = fore_df,
                 aes(x = t, ymin = lo95, ymax = hi95),
-                fill = orange_pale, alpha = 0.6) +
+                fill = teal_pale, alpha = 0.6) +
     # 80% CI band (inner, slightly darker)
     geom_ribbon(data = fore_df,
                 aes(x = t, ymin = lo80, ymax = hi80),
-                fill = orange_light, alpha = 0.7) +
+                fill = teal_light, alpha = 0.7) +
     # Historical observed line
     geom_line(data = fitted_df,
               aes(x = t, y = value),
@@ -179,35 +114,35 @@ plot_forecast_orange <- function(fc, title_text, y_label) {
     # Forecast mean line
     geom_line(data = fore_df,
               aes(x = t, y = mean),
-              colour = orange_base, linewidth = 1) +
+              colour = teal_base, linewidth = 1) +
     labs(
       title    = title_text,
       subtitle = "30-day forecast with 80% and 95% confidence intervals",
       x        = "Time (weeks)",
       y        = y_label
     ) +
-    theme_orange()
+    theme_teal()
 }
 ```
 
 ```{r germany_forecast}
 forecast_30 <- forecast(fit, h = 30)
 
-plot_forecast_orange(
+plot_forecast_teal(
   forecast_30,
   title_text = "ARIMA Forecast: Germany Full Vaccination Coverage",
   y_label    = "Fully vaccinated per 100"
 ) +
-  scale_fill_manual(values  = c("80%" = orange_light,
-                                "95%" = orange_pale)) +
-  scale_colour_manual(values = c("Point Forecast" = orange_base)) +
+  scale_fill_manual(values  = c("80%" = teal_light,
+                                "95%" = teal_pale)) +
+  scale_colour_manual(values = c("Point Forecast" = red_base)) +
   labs(
     title    = "ARIMA Forecast: Germany Full Vaccination Coverage",
     subtitle = "30-day ahead forecast with 80% and 95% confidence intervals",
     x        = "Time (weeks)",
     y        = "Fully vaccinated per 100"
   ) +
-  theme_orange()
+  theme_teal()
 ```
 
 ---
@@ -228,7 +163,7 @@ The residual diagnostics for the ARIMA(2,1,2)(0,1,1)[7] model indicate a reasona
 fit_ets <- ets(ts_germany)
 fc_ets  <- forecast(fit_ets, h = 30)
 
-plot_forecast_orange(
+plot_forecast_teal(
   fc_ets,
   title_text = "ETS Forecast: Germany Full Vaccination Coverage",
   y_label    = "Fully vaccinated per 100"
@@ -294,22 +229,22 @@ for (ctry in countries_arima) {
 
 
   print(
-    plot_forecast_orange(
+    plot_forecast_teal(
       fc_ctry,
       title_text = paste("ARIMA Forecast of Daily Vaccination Change:", ctry),
       y_label    = "Daily change in fully vaccinated per 100"
     )
    +
-      scale_fill_manual(values  = c("80%" = orange_light,
-                                    "95%" = orange_pale)) +
-      scale_colour_manual(values = c("Point Forecast" = orange_base)) +
+      scale_fill_manual(values  = c("80%" = teal_light,
+                                    "95%" = teal_pale)) +
+      scale_colour_manual(values = c("Point Forecast" = teal_base)) +
       labs(
         title    = paste("ARIMA Forecast of Daily Vaccination Change:", ctry),
         subtitle = "30-day forecast with 80% and 95% confidence intervals",
         x        = "Time (weeks)",
         y        = "Daily change in fully vaccinated per 100"
       ) +
-      theme_orange()
+      theme_teal()
   )
 }
 ```
